@@ -1,5 +1,6 @@
 import {api,esc,$,toast} from './api.js';
 import {markdown} from './reader.js';
+import {HarnessChat,resetHarness} from './harness-chat.js';
 
 export class Workspace {
   constructor({papers,collections,openPaper,reload}){
@@ -15,15 +16,22 @@ export class Workspace {
     $('#global-scope').onchange=e=>{this.scope=e.target.value;this.updateScope();};
     this.host.onclick=e=>this.click(e).catch(err=>toast(err.message));
     this.dialog=document.createElement('dialog');this.dialog.className='settings-dialog';document.body.append(this.dialog);
+    this.harnessHost=document.createElement('section');this.harnessHost.id='workspace-harness';this.harnessHost.hidden=true;this.host.append(this.harnessHost);
+    this.harness=new HarnessChat(this.harnessHost,{kind:'library',openPaper:this.openPaper,
+      scopes:()=>[{id:'',name:'全部藏品',count:this.papers().length,papers:[]},...this.collections().filter(c=>!c.archived).map(c=>({...c,count:c.papers.length}))]});
   }
   async open(){
     $('#library-main').hidden=true;document.querySelectorAll('.sidebar .active').forEach(el=>el.classList.remove('active'));this.host.hidden=false;$('#open-workspace').classList.add('active');
     const config=await api('/api/settings');$('#global-provider').textContent=config.provider==='codex'?'本机 Codex':config.model;
+    const native=config.provider==='codex';this.host.classList.toggle('harness-mode',native);this.harnessHost.hidden=!native;
+    for(const selector of ['#global-turns','#global-form','.research-footnote'])$(selector,this.host).hidden=native;
+    if(native){clearTimeout(this.timer);await this.harness.open();return;}
+    this.harness.close();
     $('#global-scope').innerHTML='<option value="">全部藏品</option>'+this.collections().filter(c=>!c.archived).map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');
     if(![...$('#global-scope').options].some(o=>o.value===this.scope))this.scope='';
     $('#global-scope').value=this.scope;this.updateScope();await this.poll();$('#global-question').focus();
   }
-  close(){this.host.hidden=true;$('#library-main').hidden=false;$('#open-workspace').classList.remove('active');clearTimeout(this.timer);}
+  close(){this.host.hidden=true;$('#library-main').hidden=false;$('#open-workspace').classList.remove('active');clearTimeout(this.timer);this.harness.close();}
   updateScope(){const group=this.collections().find(c=>c.id===this.scope);$('#scope-count').textContent=(group?group.papers.length:this.papers().length)+' 篇';}
   async poll(){
     clearTimeout(this.timer);if(this.host.hidden)return;
@@ -48,12 +56,12 @@ export class Workspace {
   }
   async settings(){
     const config=await api('/api/settings');const native=!!window.desktop;
-    this.dialog.innerHTML=`<div class="dialog-top"><span>设置</span><button data-dismiss aria-label="关闭设置">×</button></div><form id="settings-form" class="settings-form"><label>AI 接入<select name="provider"><option value="codex">本机 Codex</option><option value="api">自己的 API key</option></select></label><label>模型<input name="model" value="${esc(config.model)}" placeholder="Codex 留空沿用本机默认模型"></label><div id="api-options"><label>API 地址<input name="base_url" type="url" value="${esc(config.base_url)}" required></label><label>协议<select name="protocol"><option value="responses">Responses</option><option value="chat">Chat Completions</option></select></label><label>API key<input name="api_key" type="password" autocomplete="off" placeholder="${config.has_key?'已配置，留空保留':'填写你自己的 key'}" ${native?'':'disabled'}></label><p class="field-note">${native?'密钥使用系统密钥库保存；密钥库不可用时仅用于本次运行。':'开发模式通过 PAPER_API_KEY 环境变量提供密钥。'}</p></div><p class="field-note">${config.codex_available?'已发现本机 Codex':'未发现 Codex；安装后运行 codex login，或选择 API'}<br>论文内容会发送到所选模型服务。对话与注释保存在本机。</p><div class="settings-vault"><span>资料目录</span><code>${esc(config.vault)}</code>${native?'<button type="button" id="choose-vault" class="secondary">选择目录 ↗</button>':''}</div><p class="field-note">${config.translation_ready?'XeLaTeX 已就绪':'完整翻译需安装 XeLaTeX 与 ctex 字体包'}</p><p id="settings-error" class="error"></p><button class="primary" type="submit">保存设置</button></form>`;
+    this.dialog.innerHTML=`<div class="dialog-top"><span>设置</span><button data-dismiss aria-label="关闭设置">×</button></div><form id="settings-form" class="settings-form"><label>AI 接入<select name="provider"><option value="codex">本机 Codex</option><option value="api">自己的 API key</option></select></label><label>模型（API / 后台任务）<input name="model" value="${esc(config.model)}" placeholder="Codex 留空沿用本机默认模型"></label><label id="codex-path-field">本机 Codex 可执行文件<input name="codex_path" value="${esc(config.codex_path||'')}" placeholder="留空自动发现 codex"><small>阅读对话的模型与推理强度在输入框下方选择。使用本机登录与配置。</small></label><div id="api-options"><label>API 地址<input name="base_url" type="url" value="${esc(config.base_url)}" required></label><label>协议<select name="protocol"><option value="responses">Responses</option><option value="chat">Chat Completions</option></select></label><label>API key<input name="api_key" type="password" autocomplete="off" placeholder="${config.has_key?'已配置，留空保留':'填写你自己的 key'}" ${native?'':'disabled'}></label><p class="field-note">${native?'密钥使用系统密钥库保存；密钥库不可用时仅用于本次运行。':'开发模式通过 PAPER_API_KEY 环境变量提供密钥。'}</p></div><p class="field-note">${config.codex_available?'已发现本机 Codex':'未发现 Codex；安装后运行 codex login，或选择 API'}<br>论文内容会发送到所选模型服务。对话与注释保存在本机。</p><div class="settings-vault"><span>资料目录</span><code>${esc(config.vault)}</code>${native?'<button type="button" id="choose-vault" class="secondary">选择目录 ↗</button>':''}</div><p class="field-note">${config.translation_ready?'XeLaTeX 已就绪':'完整翻译需安装 XeLaTeX 与 ctex 字体包'}</p><p id="settings-error" class="error"></p><button class="primary" type="submit">保存设置</button></form>`;
     this.dialog.querySelector('[data-dismiss]').onclick=()=>this.dialog.close();
     const form=$('#settings-form',this.dialog);form.elements.provider.value=config.provider;form.elements.protocol.value=config.protocol;
-    const toggle=()=>$('#api-options').hidden=form.elements.provider.value!=='api';form.elements.provider.onchange=toggle;toggle();
+    const toggle=()=>{$('#api-options').hidden=form.elements.provider.value!=='api';$('#codex-path-field').hidden=form.elements.provider.value!=='codex';};form.elements.provider.onchange=toggle;toggle();
     if(native)$('#choose-vault').onclick=()=>window.desktop.chooseVault().catch(e=>$('#settings-error').textContent=e.message);
-    form.onsubmit=async e=>{e.preventDefault();const b=$('button[type=submit]',form);b.disabled=true;try{const values=Object.fromEntries(new FormData(form));const key=values.api_key;delete values.api_key;await api('/api/settings',values);window.paperProvider=values.provider==='codex'?'Codex':values.model;if(key&&native){const result=await window.desktop.setKey(key);toast(result.persisted?'设置已保存':'密钥仅用于本次运行');}else toast('设置已保存');this.dialog.close();if(!this.host.hidden)await this.open();}catch(err){$('#settings-error').textContent=err.message;}finally{b.disabled=false;}};
+    form.onsubmit=async e=>{e.preventDefault();const b=$('button[type=submit]',form);b.disabled=true;try{const values=Object.fromEntries(new FormData(form));const key=values.api_key;delete values.api_key;await api('/api/settings',values);resetHarness();window.paperProvider=values.provider==='codex'?'Codex':values.model;if(key&&native){const result=await window.desktop.setKey(key);toast(result.persisted?'设置已保存':'密钥仅用于本次运行');}else toast('设置已保存');this.dialog.close();if(!this.host.hidden)await this.open();}catch(err){$('#settings-error').textContent=err.message;}finally{b.disabled=false;}};
     this.dialog.showModal();
   }
   async domains(paper=null){

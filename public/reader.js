@@ -1,15 +1,49 @@
 import * as pdfjs from '/vendor/pdfjs-dist/legacy/build/pdf.mjs';
 import {marked} from '/vendor/marked/lib/marked.esm.js';
+import katex from '/vendor/katex/dist/katex.mjs';
 import {$,esc,toast} from './api.js';
 import {PaperChat} from './chat.js';
 
 globalThis.pdfjsLib=pdfjs;
 pdfjs.GlobalWorkerOptions.workerSrc='/vendor/pdfjs-dist/legacy/build/pdf.worker.mjs';
 const pdfUI=import('/vendor/pdfjs-dist/legacy/web/pdf_viewer.mjs');
-// CommonMark needs a boundary after closing emphasis beside CJK punctuation.
-export const markdown=text=>DOMPurify.sanitize(marked.parse((text||'').replace(/([。！？：；，、）])\*\*(?=[\p{L}\p{N}])/gu,'$1** ')),{
-  USE_PROFILES:{html:true},FORBID_TAGS:['img','iframe','form','input','style'],FORBID_ATTR:['style'],
-});
+// Render paper answers, including TeX and emphasis adjacent to CJK punctuation.
+export const markdown=text=>{
+  const math=[];
+  // Protect code while extracting math before Markdown consumes TeX backslashes.
+  const source=(text||'').replace(/```[\s\S]*?```|`[^`\n]+`|\\\[([\s\S]*?)\\\]|\$\$([\s\S]*?)\$\$|\\\(([\s\S]*?)\\\)|(?<![\\\w])\$([^\n$]+?)\$(?!\w)/g,
+    (match,displayBracket,displayDollar,inlineBracket,inlineDollar)=>{
+      if(match.startsWith('`'))return match;
+      const display=displayBracket!==undefined||displayDollar!==undefined;
+      const tex=displayBracket??displayDollar??inlineBracket??inlineDollar;
+      let html;
+      try{html=katex.renderToString(tex,{displayMode:display,throwOnError:false,strict:false,trust:false,output:'html',maxExpand:1000,maxSize:20});}
+      catch{html=esc(match);}
+      const index=math.push(html)-1;return `PAPERMATHTOKEN${index}END`;
+    });
+  const normalized=source.replace(/```[\s\S]*?```|`[^`\n]+`|\*\*([^\n]+?)\*\*/g,
+    (match,strong)=>strong===undefined?match:` **${strong.trim()}** `);
+  const rendered=marked.parse(normalized);
+  // Sanitize the author's HTML first. KaTeX's trusted=false output is inserted afterwards
+  // so its required inline positioning styles survive without allowing author styles.
+  const template=document.createElement('template');
+  template.innerHTML=DOMPurify.sanitize(rendered,{USE_PROFILES:{html:true},
+    FORBID_TAGS:['img','iframe','form','input','style'],FORBID_ATTR:['style']});
+  const walker=document.createTreeWalker(template.content,NodeFilter.SHOW_TEXT),nodes=[];
+  while(walker.nextNode())nodes.push(walker.currentNode);
+  for(const node of nodes){
+    if(!/PAPERMATHTOKEN\d+END/.test(node.data))continue;
+    const fragment=document.createDocumentFragment();let cursor=0;
+    for(const match of node.data.matchAll(/PAPERMATHTOKEN(\d+)END/g)){
+      fragment.append(document.createTextNode(node.data.slice(cursor,match.index)));
+      const equation=document.createElement('template');
+      equation.innerHTML=math[Number(match[1])]??esc(match[0]);fragment.append(equation.content);
+      cursor=match.index+match[0].length;
+    }
+    fragment.append(document.createTextNode(node.data.slice(cursor)));node.replaceWith(fragment);
+  }
+  return template.innerHTML;
+};
 
 export class Reader {
   constructor(host,options){

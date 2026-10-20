@@ -61,6 +61,8 @@ def init_db():
     conversation.initialize()
     import global_chat
     global_chat.initialize()
+    import harness
+    harness.initialize()
 
 
 def parse_arxiv(raw):

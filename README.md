@@ -10,10 +10,10 @@ A quiet desktop library for papers, reading, and research across papers.
 
 - **Library:** gallery, catalog and matrix views; keyword and semantic search; your own collections and domains.
 - **Reader:** continuous PDF pages, selectable text, outlines, search, bilingual switching, saved positions, highlights and notes.
-- **Paper conversations:** ask about the current paper or selected passage. Verified quotes link back to physical PDF pages.
-- **Research workspace:** ask across the library or a collection. The assistant selects up to six relevant papers, reads a bounded set of pages and distinguishes evidence from hypotheses. Coverage is shown; this is not exhaustive literature review.
+- **Codex conversations:** real, persistent local Codex threads in the reader and research workspace. Choose the model and reasoning effort from your installed harness, see streamed answers and tool activity, stop a turn, and continue after restarting the app.
+- **Complete PDF access:** Codex can read any page and view original page images, including figures and equations. Research conversations can browse the whole library or a selected collection. Page citations open the bilingual reader; formulas render locally.
 - **arXiv ingestion:** original PDF + LaTeX source → Chinese translation → XeLaTeX compilation → four reading notes → classification. Progress is retained for retries. Existing papers are deduplicated by arXiv ID.
-- **Your AI:** local Codex login, or an API key with Responses / Chat Completions structured output support. The same provider powers search, conversations, translation and classification.
+- **Your AI:** your local Codex login and configuration, or your own API key. API mode retains the simpler structured question/answer workflow. Import and search use separate structured jobs.
 
 ## Run the desktop app
 
@@ -32,6 +32,10 @@ npm start
 On Windows, activate `.venv\Scripts\activate` and set `PAPER_PYTHON` to that environment's `python.exe` before `npm start`. On first launch, choose a paper directory. An empty directory works; the app creates its structure as needed.
 
 **AI setup:** install and log in to [Codex CLI](https://developers.openai.com/codex/cli/), or open Settings and provide your API base URL, protocol, model and key. API endpoints must support JSON Schema structured output. Remote endpoints require HTTPS; local model servers may use loopback HTTP.
+
+**Codex harness:** tested with Codex CLI 0.162.1. The app launches your `codex app-server` over stdio and uses its native `thread/start`, `thread/resume`, `turn/start` and streaming notifications. Settings can point to another local Codex executable. Model choices and supported reasoning efforts come from the harness; new conversations inherit your local defaults. No tools are disabled and no low-effort or short-answer instruction is imposed on conversations. Threads start with a read-only sandbox; commands or file changes requiring approval appear in the app. The standard Codex login, skills and MCP configuration remain yours.
+
+Each conversation shows its native thread ID. Once a turn has been submitted, it can also be continued with `codex resume <thread-id>`. Avoid using two clients on the same thread simultaneously. The app retains its own display history; turns added by another client are part of Codex's model context but are not currently imported into the app's display history. The ↶ control opens pre-0.2 question/answer records.
 
 **Full translation:** install XeLaTeX with `ctex`, Fandol fonts and the LaTeX packages required by the paper. TeX Live and MiKTeX can provide these. Some arXiv papers have no usable LaTeX source or need manual compilation repair; failed work remains incomplete and resumable, never silently reported as translated. The retained compilation log helps diagnose missing packages. The portable skill also calls for visual review of the finished PDF; automated compilation alone does not guarantee publication-quality layout.
 
@@ -53,7 +57,9 @@ The program and your library are separate. There is no hosted account or built-i
     state/                   # local SQLite, thumbnails, preferences, job results
 ```
 
-Paper contents and queries are sent to the AI provider you choose when you invoke an AI feature. Personal drafts and annotations are not automatically added to cross-paper prompts. AI responses can still be wrong: quote verification establishes that a quote exists on the given page, not that every interpretation is correct.
+Paper contents and queries are sent to the AI provider you choose when you invoke an AI feature. Personal drafts and annotations are not automatically added to cross-paper prompts. The full Codex harness can use your configured local tools and access files permitted by its sandbox. Native threads also persist in your own Codex home directory. Back up that directory if you need to move resumable Codex conversations to another machine.
+
+PDF access is tool based: the complete files are available, with text reads and page images retrieved as needed. This is not a ChatGPT PDF-upload API or a claim that every page is always in the model context. Native Codex citations are navigable but are not automatically quote-verified. The older API mode still verifies literal quotations; neither mode guarantees the correctness of an interpretation.
 
 API keys are stored in the operating system's encrypted key store through Electron when available. If secure storage is unavailable, a newly entered key is used only for the current run. The key is never returned by the HTTP settings endpoint. For CLI/development usage, supply `PAPER_API_KEY` or `OPENAI_API_KEY` in your own environment. No account, login session, key, paper library or personal note is included in this repository.
 

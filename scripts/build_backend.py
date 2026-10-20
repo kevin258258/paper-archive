@@ -11,7 +11,7 @@ args = [sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', '--name',
         '--distpath', 'build/backend', '--workpath', 'build/pyinstaller', '--specpath', 'build',
         '--collect-all', 'pymupdf', '--hidden-import', 'yaml',
         '--add-data', f'{root / "public"}{sep}public', '--add-data', f'{root / "skills"}{sep}skills']
-for name in ['pdfjs-dist', 'marked', 'dompurify']:
+for name in ['pdfjs-dist', 'marked', 'dompurify', 'katex']:
     args += ['--add-data', f'{root / "node_modules" / name}{sep}node_modules/{name}']
 args += [str(root / 'server.py')]
 subprocess.run(args, check=True)

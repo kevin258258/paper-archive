@@ -11,6 +11,7 @@ Dependencies retain their own license terms and notices. The desktop distributio
 | certifi | CA certificate bundle | MPL-2.0 |
 | PDF.js (`pdfjs-dist`) | PDF rendering and selection | Apache-2.0 |
 | Marked | Markdown rendering | MIT |
+| KaTeX | Mathematical formula rendering | MIT |
 | DOMPurify | HTML sanitization | Apache-2.0 or MPL-2.0 |
 | PyInstaller | Backend packaging | GPL-2.0-or-later with bootloader exception |
 | electron-builder | Desktop packaging | MIT |

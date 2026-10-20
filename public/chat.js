@@ -1,7 +1,33 @@
 import {api,esc,$,toast} from './api.js';
 import {markdown} from './reader.js';
+import {HarnessChat} from './harness-chat.js';
 
 export class PaperChat {
+  constructor(reader){this.reader=reader;}
+  shell(){
+    this.native=window.paperProvider==='Codex';
+    if(!this.native){this.legacy=new LegacyPaperChat(this.reader);return this.legacy.shell();}
+    return '<section class="chat-panel" data-panel="chat"><div id="paper-harness"></div></section>';
+  }
+  open(paper){
+    if(!this.native)return this.legacy.open(paper);
+    this.client?.close();
+    this.client=new HarnessChat($('#paper-harness',this.reader.host),{
+      kind:'paper',paper_id:paper.id,title:paper.title,
+      context:()=>({page:this.reader.viewer?.currentPageNumber||1,language:this.reader.language}),
+      openPaper:async c=>{if(c.paper_id===paper.id)await this.reader.jump(c.language,c.page);else throw Error('引用不属于当前论文');},
+    });
+    this.client.open();
+  }
+  stop(){this.client?.close();this.legacy?.stop();}
+  pageChanged(){this.client?.pageChanged();this.legacy?.pageChanged();}
+  setSelection(value){
+    if(!this.native)return this.legacy?.setSelection(value);
+    this.client?.setSelection(value);$('#paper-harness textarea',this.reader.host)?.focus();
+  }
+}
+
+class LegacyPaperChat {
   constructor(reader){this.reader=reader;this.drafts=new Map();this.epoch=0;}
   shell(){
     return `<section class="chat-panel" data-panel="chat">

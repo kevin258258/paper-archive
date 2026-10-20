@@ -1,7 +1,7 @@
 """Run the local application: python3 server.py"""
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
-from urllib.parse import urlparse, unquote
+from urllib.parse import urlparse, unquote, parse_qs
 import json
 import mimetypes
 import os
@@ -23,6 +23,7 @@ import conversation
 import global_chat
 import taxonomy
 import settings
+import harness
 
 PORT = int(os.environ.get("PAPER_READER_PORT", "8767"))
 TOKEN = secrets.token_urlsafe(32)
@@ -54,7 +55,7 @@ def range_bounds(header, size):
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         # Queries are sent in POST bodies, never logged.
-        if args and str(args[0]).startswith(("GET /api/jobs", "GET /assets/")):
+        if args and str(args[0]).startswith(("GET /api/jobs", "GET /api/harness/sessions/", "GET /assets/")):
             return
         super().log_message(fmt, *args)
 
@@ -98,6 +99,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json({"papers": lib.papers()})
             if path == "/api/settings":
                 return self.json(settings.public())
+            if path == "/api/harness/sessions":
+                query = parse_qs(urlparse(self.path).query)
+                return self.json({"sessions": harness.listing(query.get("kind", ["library"])[0],
+                                                             query.get("paper_id", [""])[0])})
+            if path == "/api/harness/activity":
+                return self.json({"active": harness.active()})
+            m = re.fullmatch(r"/api/harness/sessions/([a-f0-9]+)", path)
+            if m:
+                query = parse_qs(urlparse(self.path).query)
+                return self.json(harness.snapshot(m[1], query.get("after", [None])[0]))
             if path == "/api/domains":
                 return self.json(taxonomy.read())
             if path == "/api/global-chat":
@@ -126,7 +137,7 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith("/vendor/"):
                 rel = path.removeprefix("/vendor/")
                 f = (VENDOR / rel).resolve()
-                if not f.is_relative_to(VENDOR.resolve()) or rel.split("/")[0] not in ("pdfjs-dist", "marked", "dompurify"):
+                if not f.is_relative_to(VENDOR.resolve()) or rel.split("/")[0] not in ("pdfjs-dist", "marked", "dompurify", "katex"):
                     return self.send_error(404)
             else:
                 f = (PUBLIC / (path.lstrip("/") or "index.html")).resolve()
@@ -137,6 +148,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.file(f)
         except KeyError:
             self.json({"error": "未找到记录"}, 404)
+        except (ValueError, RuntimeError) as exc:
+            self.json({"error": str(exc)}, 400)
         except (BrokenPipeError, ConnectionResetError):
             pass
 
@@ -190,6 +203,15 @@ class Handler(BaseHTTPRequestHandler):
             path = urlparse(self.path).path
             if path == "/api/settings":
                 return self.json(settings.save(data))
+            if path == "/api/harness/connect":
+                return self.json(harness.capabilities())
+            if path == "/api/harness/sessions":
+                return self.json(harness.create(data), 201)
+            m = re.fullmatch(r"/api/harness/sessions/([a-f0-9]+)/(turn|interrupt|respond)", path)
+            if m:
+                operation = {"turn": harness.start, "respond": harness.respond,
+                             "interrupt": lambda uid, _: harness.interrupt(uid)}[m[2]]
+                return self.json(operation(m[1], data))
             if path == "/api/domains":
                 return self.json(taxonomy.save(data))
             if path == "/api/global-chat":
@@ -217,7 +239,7 @@ class Handler(BaseHTTPRequestHandler):
             if m:
                 return self.json(jobs.cancel(m[1]) if m["action"] == "cancel" else jobs.retry(m[1]))
             self.json({"error": "未知操作"}, 404)
-        except (ValueError, TypeError) as exc:
+        except (ValueError, TypeError, RuntimeError, OSError) as exc:
             self.json({"error": str(exc)}, 400)
         except KeyError:
             self.json({"error": "未找到记录"}, 404)
@@ -247,6 +269,7 @@ def main():
     ALLOWED_HOSTS = {f"127.0.0.1:{PORT}", f"localhost:{PORT}"}
     print(json.dumps({"ready": True, "port": PORT}), flush=True)
     def terminate(signum, frame):
+        harness.shutdown()
         for uid, proc in list(jobs.PROCESSES.items()):
             jobs.CANCELLED.add(uid)
             jobs.stop_process(proc)
@@ -256,6 +279,7 @@ def main():
     try:
         server.serve_forever()
     except KeyboardInterrupt:
+        harness.shutdown()
         server.server_close()
 
 

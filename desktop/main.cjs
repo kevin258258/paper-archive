@@ -80,7 +80,7 @@ app.whenReady().then(async()=>{
     else if(fs.existsSync(file))fs.unlinkSync(file);
     backend.stdin.write(JSON.stringify({api_key:apiKey})+'\n');return {persisted};
   });
-  ipcMain.handle('archive:choose-vault',async event=>{validSender(event);const rows=await fetch(origin+'/api/jobs',{headers:{'X-Desktop-Token':desktopToken}}).then(r=>r.json());const response=rows.some(r=>r.status==='running'||r.status==='queued');if(response)throw Error('请先等待或取消正在运行的任务');if(await selectVault()){app.relaunch();app.quit();}});
+  ipcMain.handle('archive:choose-vault',async event=>{validSender(event);const rows=await fetch(origin+'/api/jobs',{headers:{'X-Desktop-Token':desktopToken}}).then(r=>r.json());const activity=await fetch(origin+'/api/harness/activity',{headers:{'X-Desktop-Token':desktopToken}}).then(r=>r.json());const response=activity.active||rows.some(r=>r.status==='running'||r.status==='queued');if(response)throw Error('请先等待或取消正在运行的任务');if(await selectVault()){app.relaunch();app.quit();}});
   await startBackend();await openWindow();
 }).catch(error=>{dialog.showErrorBox('无法启动 Paper Archive',String(error.message));app.quit();});
 app.on('activate',()=>{if(!BrowserWindow.getAllWindows().length&&origin)openWindow();});

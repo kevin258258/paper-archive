@@ -7,7 +7,8 @@ from urllib.parse import urlparse
 import library as lib
 
 LOCK = threading.RLock()
-DEFAULT = {"provider": "codex", "model": "", "base_url": "https://api.openai.com/v1", "protocol": "responses"}
+DEFAULT = {"provider": "codex", "model": "", "codex_path": "",
+           "base_url": "https://api.openai.com/v1", "protocol": "responses"}
 
 
 def read():
@@ -24,6 +25,11 @@ def save(data):
         raise ValueError('无效 AI 配置')
     if not isinstance(value['model'], str) or len(value['model']) > 150:
         raise ValueError('无效模型名称')
+    from pathlib import Path
+    command = value["codex_path"]
+    if not isinstance(command, str) or (command and (
+            not Path(command).is_absolute() or not Path(command).is_file() or not os.access(command, os.X_OK))):
+        raise ValueError('Codex 路径必须是本机可执行文件的绝对路径；留空自动发现')
     url = urlparse(value['base_url'])
     if url.scheme != 'https' and not (url.scheme == 'http' and url.hostname in ('localhost', '127.0.0.1', '::1')):
         raise ValueError('API 地址需要 HTTPS；本机服务可以使用 HTTP')
@@ -32,6 +38,9 @@ def save(data):
     value['base_url'] = value['base_url'].rstrip('/')
     if value['provider'] == 'api' and not value['model'].strip():
         raise ValueError('请输入 API 模型名称')
+    if value["codex_path"] != read()["codex_path"]:
+        import harness
+        harness.reconfigure()
     with LOCK:
         tmp = lib.STATE / 'preferences.tmp'
         tmp.write_text(json.dumps(value, ensure_ascii=False, indent=2))
@@ -41,5 +50,5 @@ def save(data):
 
 def public():
     return {**read(), 'has_key': bool(os.environ.get('PAPER_API_KEY') or os.environ.get('OPENAI_API_KEY')),
-            'codex_available': bool(shutil.which('codex')), 'vault': str(lib.ROOT),
+            'codex_available': bool(read()["codex_path"] or shutil.which('codex')), 'vault': str(lib.ROOT),
             'translation_ready': bool(shutil.which('xelatex')), 'desktop': bool(os.environ.get('PAPER_DESKTOP_TOKEN'))}
