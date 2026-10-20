@@ -1,0 +1,28 @@
+name: Build Linux
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: pip install -r requirements.txt pyinstaller==6.22.3
+      - run: npm ci
+      - run: python scripts/test.py
+      - run: python scripts/build_backend.py
+      - run: npm run dist:linux -- --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: paper-archive-linux
+          path: |
+            dist/*.AppImage
+            dist/*.tar.gz

@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>藏 / PAPER</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M5 4h22v24H5zM11 4v24M17 4v24M23 4v24' fill='none' stroke='%23222'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/vendor/pdfjs-dist/web/pdf_viewer.css">
+  <link rel="stylesheet" href="/collection.css"><link rel="stylesheet" href="/app.css"><link rel="stylesheet" href="/studio.css"><link rel="stylesheet" href="/workspace.css">
+  <script src="/vendor/dompurify/dist/purify.min.js"></script>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <a class="identity" href="/" aria-label="全部藏品"><span class="logo" aria-hidden="true">✳</span><strong>藏</strong><span class="mono">PAPER<br>ARCHIVE</span></a>
+    <div class="side-section">
+      <button class="nav active" data-scope="all"><span>全部藏品</span><span class="mono" id="total">—</span></button>
+      <button class="nav" data-scope="marked"><span>已收藏</span><span class="mono" id="marked-count">00</span></button>
+      <button class="nav" data-scope="unread"><span>未读</span><span class="mono" id="unread-count">—</span></button>
+      <button class="nav" id="open-workspace"><span>✳ 研究台</span><span class="mono">AI</span></button>
+    </div>
+    <div class="side-label collection-label">收藏集 <button id="manage-collections" aria-label="管理收藏集" title="新建与管理">＋</button></div>
+    <div id="collection-nav"></div>
+    <div class="side-label">领域 <button id="manage-domains" aria-label="管理领域">＋</button></div><div id="domain-nav"></div>
+    <div class="side-label topic-label">主题 <span>↓</span></div><div id="topic-nav" class="topic-nav"></div>
+    <div class="side-bottom"><span class="status-dot"></span><span id="connection">本地文献库</span><button id="open-settings" aria-label="设置">⚙</button></div>
+  </aside>
+  <main id="library-main">
+    <header class="topbar">
+      <form id="search-form" class="search">
+        <button id="search-mode" type="button" aria-pressed="true" title="切换 AI / 关键词检索">AI</button>
+        <input id="search" type="search" aria-label="搜索文献" placeholder="描述你想找的论文" autocomplete="off">
+        <button type="submit" aria-label="开始搜索">↵</button>
+      </form>
+      <button id="open-import" class="icon-button" aria-label="添加 arXiv 论文" title="添加 arXiv 论文">＋</button>
+      <button id="open-jobs" class="text-button">任务 <span id="job-count" class="mono">0</span></button>
+    </header>
+    <section class="collection-header">
+      <div><div class="eyebrow mono">PAPER ARCHIVE <span id="domain-code">/ ALL</span></div><h1 id="heading">全部藏品<span>—</span></h1></div>
+      <div class="view-tabs" role="group" aria-label="展示方式">
+        <button data-view="A" title="陈列"><span class="view-icon">▦</span><span>陈列</span></button>
+        <button data-view="B" title="目录"><span class="view-icon">☷</span><span>目录</span></button>
+        <button data-view="C" title="矩阵"><span class="view-icon">▤</span><span>矩阵</span></button>
+      </div>
+    </section>
+    <section class="toolbar">
+      <div class="filter-buttons">
+        <button id="filter-cn" aria-pressed="false">中文译本</button>
+        <button id="filter-notes" aria-pressed="false">阅读笔记</button>
+        <select id="year" aria-label="按年份筛选"><option value="">全部年份</option></select>
+      </div>
+      <div class="sort-controls">
+        <label class="density" title="陈列密度"><input id="density" type="range" min="3" max="7" value="4" aria-label="陈列列数"></label>
+        <select id="sort" aria-label="排序"><option value="relevance" hidden>相关度</option><option value="recent" selected>最近收录</option><option value="year">发表年份</option><option value="title">标题</option></select>
+        <button id="reset" class="text-button">重置 ↗</button>
+      </div>
+    </section>
+    <div class="mobile-facets"><select id="mobile-domain" aria-label="按领域筛选"></select><select id="mobile-topic" aria-label="按主题筛选"></select></div>
+    <div id="active-filters"></div>
+    <section id="search-status" aria-live="polite" hidden></section>
+    <section id="collection" aria-label="论文藏品"><div class="empty">读取文献库…</div></section>
+    <footer class="footer mono"><span id="footer-count"></span><button id="refresh">↻ 刷新文献库</button></footer>
+  </main>
+</div>
+<div id="backdrop" hidden></div>
+<aside id="drawer" class="drawer" role="dialog" aria-modal="true" aria-label="文献详情" hidden></aside>
+<dialog id="import-dialog">
+  <form id="import-form">
+    <div class="dialog-top"><span>添加论文</span><button type="button" id="import-close" aria-label="关闭添加">×</button></div>
+    <input id="arxiv-input" aria-label="arXiv 链接或编号" placeholder="arxiv.org/abs/…" required autocomplete="off">
+    <p class="field-note">原文 · 中文译本 · 阅读笔记</p>
+    <div id="import-error" class="error" role="alert"></div>
+    <button class="primary" type="submit">翻译并入库 ↗</button>
+  </form>
+</dialog>
+<section id="reader" role="dialog" aria-modal="true" aria-label="论文阅读器" hidden></section>
+<div id="toast" role="status" hidden></div>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

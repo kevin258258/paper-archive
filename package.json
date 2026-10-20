@@ -1,0 +1,72 @@
+{
+  "devDependencies": {
+    "electron": "44.7.2",
+    "electron-builder": "26.15.3",
+    "dompurify": "3.4.17",
+    "marked": "18.1.1",
+    "pdfjs-dist": "6.4.299"
+  },
+  "name": "paper-archive",
+  "version": "0.1.0",
+  "description": "A local-first paper library, reader and cross-paper research workspace",
+  "main": "desktop/main.cjs",
+  "license": "AGPL-3.0-only",
+  "author": "Paper Archive contributors",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "test": "python3 scripts/test.py",
+    "build:backend": "python3 scripts/build_backend.py",
+    "dist": "electron-builder",
+    "dist:linux": "electron-builder --linux AppImage tar.gz",
+    "pack": "electron-builder --dir"
+  },
+  "build": {
+    "appId": "org.paperarchive.desktop",
+    "productName": "Paper Archive",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "desktop/**",
+      "package.json",
+      "LICENSE",
+      "THIRD_PARTY_NOTICES.md"
+    ],
+    "extraResources": [
+      {
+        "from": "build/backend/paper-backend",
+        "to": "backend",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "linux": {
+      "target": [
+        "AppImage",
+        "tar.gz"
+      ],
+      "category": "Education",
+      "executableName": "paper-archive",
+      "icon": "desktop/icons/icon.png",
+      "desktop": {
+        "entry": {
+          "StartupWMClass": "paper-archive"
+        }
+      }
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.education"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    }
+  }
+}
