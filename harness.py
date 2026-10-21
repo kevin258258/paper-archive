@@ -65,7 +65,7 @@ def snapshot(uid, revision=None):
 
 
 def listing(kind, paper_id=""):
-    if kind not in ("paper", "library"):
+    if kind not in ("paper", "library", "import"):
         raise ValueError("无效的会话类型")
     with LOCK, lib.db() as c:
         ids = [r["id"] for r in c.execute("SELECT id FROM harness_sessions")]
@@ -99,6 +99,32 @@ def create(data):
         SESSIONS[s["id"]] = s
         _save(s)
     return snapshot(s["id"])
+
+
+def create_import(arxiv, job_id):
+    arxiv = lib.parse_arxiv(arxiv)
+    config = settings.read()
+    skill = Path(config['import_skill']) if config['import_skill'] else lib.BASE / 'skills/arxiv-translate/SKILL.md'
+    if not skill.is_file():
+        raise ValueError('未找到入库 Skill：' + str(skill))
+    with LOCK:
+        for row in listing('import'):
+            old = _load(row['id'])
+            if old.get('arxiv') == arxiv:
+                if old['status'] in BUSY:
+                    raise ValueError('这篇论文的 Codex 入库会话仍在运行')
+                old.update(job_id=job_id, skill_path=str(skill))
+                _save(old)
+                return snapshot(old['id'])
+        uid = uuid.uuid4().hex
+        s = dict(id=uid, thread_id=None, kind='import', paper_id='', paper_ids=[], arxiv=arxiv,
+                 scope='arXiv ' + arxiv, title='翻译入库 · ' + arxiv, status='idle',
+                 model=config['import_model'], effort=config['import_effort'], turns=[], requests=[],
+                 error='', revision=0, updated=time.time(), cancel_requested=False,
+                 job_id=job_id, skill_path=str(skill))
+        SESSIONS[uid] = s
+        _save(s)
+    return snapshot(uid)
 
 
 def executable():
@@ -158,6 +184,11 @@ def start(uid, data):
     question = data.get("question")
     if not isinstance(question, str) or not 1 <= len(question.strip()) <= 100000:
         raise ValueError("请输入问题（最多 100000 字）")
+    initial = snapshot(uid)
+    if initial['kind'] == 'import':
+        config = settings.read()
+        data = {**data, 'model': data.get('model') or config['import_model'],
+                'effort': data.get('effort') or config['import_effort']}
     model, effort = preferences(data)
     context = data.get("context") or {}
     if not isinstance(context, dict):
@@ -181,7 +212,7 @@ def start(uid, data):
                 "items": [], "status": "starting", "model": model, "effort": effort}
         s["turns"].append(turn)
         if len(s["turns"]) == 1:
-            s["title"] = question.strip()[:70]
+            s["title"] = ('翻译入库 · ' + s['arxiv']) if s['kind'] == 'import' else question.strip()[:70]
         _save(s)
     threading.Thread(target=_start, args=(uid,), daemon=True).start()
     return snapshot(uid)
@@ -194,10 +225,15 @@ def _start(uid):
             s = copy.deepcopy(_load(uid))
         common = {"cwd": str(lib.ROOT), "model": s["model"], "sandbox": "read-only",
                   "approvalPolicy": "on-request", "approvalsReviewer": "user"}
+        importing = s['kind'] == 'import'
+        if importing:
+            import agent_import
+            import agent_import_tools
+            common['sandbox'] = 'workspace-write'
         if not s["thread_id"]:
             result = rpc.call("thread/start", {**common, "ephemeral": False,
-                              "developerInstructions": paper_tools.INSTRUCTIONS,
-                              "dynamicTools": paper_tools.TOOLS})
+                              "developerInstructions": agent_import.INSTRUCTIONS if importing else paper_tools.INSTRUCTIONS,
+                              "dynamicTools": agent_import_tools.TOOLS if importing else paper_tools.TOOLS})
             with LOCK:
                 _load(uid)["thread_id"] = result["thread"]["id"]
                 _save(_load(uid))
@@ -226,9 +262,13 @@ def _start(uid):
                           "pdf_files": {k: v for k, v in paper["files"].items() if k in ("original", "chinese")}}]
         context = {"scope": s["scope"], "paper_ids": s["paper_ids"], "complete_pdf_resources": resources,
                    "reader": turn["context"]}
+        if importing:
+            context.update(arxiv=s['arxiv'], vault=str(lib.ROOT), import_job=s.get('job_id'))
         # Context is supplied independently of the displayed question, without injecting
         # extracted snippets, shortened answers or a structured-output schema.
         inputs = [{"type": "text", "text": turn["question"]}]
+        if importing:
+            inputs.append({'type': 'skill', 'name': 'arxiv-translate', 'path': s['skill_path']})
         result = rpc.call("turn/start", {"threadId": s["thread_id"], "input": inputs,
                           "additionalContext": {"paper_archive": {
                               "kind": "untrusted", "value": json.dumps(context, ensure_ascii=False)}},
@@ -263,6 +303,9 @@ def safe_item(item):
     result = {k: item[k] for k in keys if k in item}
     if "aggregatedOutput" in result and result["aggregatedOutput"]:
         result["aggregatedOutput"] = result["aggregatedOutput"][-30000:]
+    if item.get('tool') in ('archive_compile_translation', 'archive_check_translation', 'archive_finish_import'):
+        result['outputText'] = '\n'.join(c.get('text', '') for c in (item.get('contentItems') or [])
+                                       if c.get('type') == 'inputText')[-20000:]
     return result
 
 
@@ -305,7 +348,7 @@ def notification(method, params):
             if item is None:
                 item = {"id": ident, "type": kind}
                 turn["items"].append(item)
-            item[field] = item.get(field, "") + params.get("delta", "")
+            item[field] = (item.get(field) or "") + (params.get("delta") or "")
             if field == "aggregatedOutput":
                 item[field] = item[field][-30000:]
         elif method == "thread/tokenUsage/updated":
@@ -335,7 +378,11 @@ def server_request(rpc, message):
         s = copy.deepcopy(session) if session else None
     if method == "item/tool/call" and s:
         try:
-            result = paper_tools.execute(s, params["tool"], params.get("arguments", {}))
+            if s['kind'] == 'import':
+                import agent_import_tools
+                result = agent_import_tools.execute(s, params['tool'], params.get('arguments', {}))
+            else:
+                result = paper_tools.execute(s, params["tool"], params.get("arguments", {}))
         except Exception as exc:
             result = {"success": False, "contentItems": [{"type": "inputText", "text": str(exc)}]}
         rpc.send({"id": rpc_id, "result": result})

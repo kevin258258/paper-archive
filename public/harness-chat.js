@@ -48,6 +48,7 @@ export class HarnessChat {
           <button type="submit" aria-label="发送给 Codex">↑</button></div>
       </form><div class="harness-footer"><span data-status>本机 harness · 读取资料</span><span data-usage></span></div>
       <p class="harness-error error" role="alert"></p>`;
+    if(options.kind==='import'){for(const action of ['new','legacy'])$('[data-action='+action+']',root).hidden=true;}
     $('form',root).onsubmit=e=>{e.preventDefault();this.send();};
     $('textarea',root).onkeydown=e=>{
       if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();if(!busy(this.session))$('form',root).requestSubmit();}
@@ -70,7 +71,7 @@ export class HarnessChat {
   close(){this.closed=true;this.epoch++;clearTimeout(this.timer);}
   error(error){$('.harness-error',this.root).textContent=error?.message||error||'';}
   renderSessions(){
-    $('[data-sessions]',this.root).innerHTML='<option value="">新对话</option>'+this.sessions.map(s=>`<option value="${s.id}">${esc(s.title)}</option>`).join('');
+    $('[data-sessions]',this.root).innerHTML=(this.options.kind==='import'?'':'<option value="">新对话</option>')+this.sessions.map(s=>`<option value="${s.id}">${esc(s.title)}</option>`).join('');
     $('[data-sessions]',this.root).value=this.uid||'';
   }
   async switchSession(uid){
@@ -104,6 +105,7 @@ export class HarnessChat {
   }
   pageChanged(){
     const context=this.options.context?.();
+    if(this.options.kind==='import'){$('.harness-attachment',this.root).textContent='⌑ arXiv · 全文翻译、编译与视觉核验';return;}
     $('.harness-attachment',this.root).textContent=context?`⌑ 完整 PDF  ·  当前 ${context.language==='chinese'?'中':'EN'} ${context.page} 页`:'⌑ 范围内的完整 PDF  ·  正文与图表';
   }
   setSelection(value){
@@ -162,6 +164,7 @@ export class HarnessChat {
     const label={reasoning:'思考摘要',commandExecution:'运行命令',dynamicToolCall:i.tool,mcpToolCall:`${i.server} · ${i.tool}`,fileChange:'文件变更',plan:'计划',webSearch:'搜索网页'}[i.type]||i.type;
     let body=i.type==='reasoning'?(i.summary?.join('\n')||i.summaryText||''):i.text||i.command||JSON.stringify(i.arguments||i.changes||{},null,2);
     if(i.aggregatedOutput)body+='\n\n'+i.aggregatedOutput;
+    if(i.outputText)body+='\n\n'+i.outputText;
     return `<details class="harness-activity" data-item="${esc(i.id)}" ${opened.has(i.id)?'open':''}><summary><span class="harness-activity-icon">${i.type==='reasoning'?'◌':'⌁'}</span>${esc(label)}<span>${i.status==='inProgress'?'进行中':i.status==='failed'?'失败':'↗'}</span></summary><pre>${esc(body)}</pre></details>`;
   }
   request(r){

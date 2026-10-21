@@ -98,6 +98,16 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(sum(m == "thread/start" for m, _ in self.rpc.calls), 1)
         self.assertIn(("thread/resume", unittest.mock.ANY), self.rpc.calls)
 
+    def test_command_stream_accepts_native_null_initial_output(self):
+        session = harness.create({"kind": "paper", "paper_id": "p1"})
+        self.start(session["id"])
+        harness.notification("item/started", {"threadId": "native-thread", "item": {
+            "id": "command-1", "type": "commandExecution", "aggregatedOutput": None}})
+        harness.notification("item/commandExecution/outputDelta", {
+            "threadId": "native-thread", "itemId": "command-1", "delta": "compile output"})
+        item = harness.snapshot(session["id"])["turns"][-1]["items"][-1]
+        self.assertEqual(item["aggregatedOutput"], "compile output")
+
     def test_all_pdf_pages_and_real_image_are_available_with_scope_enforced(self):
         s = harness.create({"kind": "paper", "paper_id": "p1"})
         result = paper_tools.execute(s, "archive_read_pdf", {"paper_id": "p1", "start_page": 21, "end_page": 25})

@@ -114,6 +114,12 @@ def cancel(uid):
     if job["status"] in TERMINAL:
         return job
     CANCELLED.add(uid)
+    if job['kind'] == 'import' and (job.get('result') or {}).get('session_id'):
+        import harness
+        try:
+            harness.interrupt(job['result']['session_id'])
+        except (KeyError, RuntimeError):
+            event(uid, 'Codex 连接已断开；任务取消状态仍会保存。')
     proc = PROCESSES.get(uid)
     if proc and proc.poll() is None:
         try:
@@ -358,6 +364,10 @@ def import_paper(uid, arxiv):
         if lib.find_arxiv(arxiv):
             event(uid, "已有论文包尚不完整，将复用目录并补齐。")
         import importer
+        import settings
+        if settings.read()['import_mode'] == 'codex':
+            import agent_import
+            return agent_import.run(uid, arxiv)
         return importer.import_paper(uid, arxiv)
 
 

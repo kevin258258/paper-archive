@@ -102,7 +102,9 @@ def invariant(text):
     commands = re.findall(r'\\[A-Za-z@]+\*?', text)
     refs = re.findall(r'\\(?:cite\w*|ref|eqref|label)\*?(?:\[[^\]]*\])*\{[^}]*\}', text)
     maths = re.findall(r'\$\$[\s\S]*?\$\$|(?<!\\)\$[^$]*?(?<!\\)\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)', text)
-    return commands, refs, [re.sub(r'\s+', '', x) for x in maths]
+    # Translation can move a variable mention before its defining equation.
+    # Preserve every expression and its multiplicity, without fixing prose order.
+    return commands, refs, sorted(re.sub(r'\s+', '', x) for x in maths)
 
 
 def translate(uid, source, target):

@@ -2,6 +2,7 @@ import {api,setToken,esc,$,toast} from './api.js';
 import {Reader,markdown} from './reader.js';
 import {Collections} from './collections.js';
 import {Workspace} from './workspace.js';
+import {HarnessChat} from './harness-chat.js';
 
 let papers=[], reading={}, domains=[], current=[], activePaper=null, jobs=[], drawerMode='', activeSearch=null, searchResult=null;
 const doneJobs=new Set(), expandedJobs=new Map();
@@ -92,12 +93,21 @@ function showJobs(){
   $('#drawer').innerHTML=`<div class="drawer-top"><span>任务</span><button class="close" data-close aria-label="关闭任务">×</button></div><div id="job-list"></div>`;
   jobSnapshot='';renderJobs();$('#drawer .close').focus();
 }
+async function openImportSession(id){
+  const dialog=document.createElement('dialog');dialog.className='import-session-dialog';dialog.setAttribute('aria-label','翻译入库 Codex 会话');
+  dialog.innerHTML='<div class="dialog-top"><span>翻译入库 · Codex</span><button aria-label="关闭入库会话">×</button></div><section class="import-harness"></section>';
+  document.body.append(dialog);dialog.showModal();
+  const client=new HarnessChat($('.import-harness',dialog),{kind:'import',
+    openPaper:async c=>{dialog.close();$('.app').inert=true;await reader.open(byId(c.paper_id));await reader.jump(c.language,c.page);}});
+  client.uid=id;dialog.onclose=()=>{client.close();dialog.remove();};$('.dialog-top button',dialog).onclick=()=>dialog.close();
+  await client.open();
+}
 function renderJobs(){
   $('#job-count').textContent=jobs.filter(j=>!['completed','failed','cancelled','interrupted'].includes(j.status)).length;
   if(drawerMode!=='jobs')return;
   const snapshot=JSON.stringify([jobs,[...expandedJobs]]);if(snapshot===jobSnapshot)return;jobSnapshot=snapshot;
   const latest=jobs.filter((j,i)=>jobs.findIndex(p=>p.kind===j.kind&&p.query===j.query&&p.paper_id===j.paper_id)===i);
-  $('#job-list').innerHTML=latest.length?latest.map(j=>`<article class="job"><div class="job-kind">${j.kind==='import'?'arXiv → 文献库':j.kind==='chat'?'论文问答':j.kind==='global'?'研究台':'AI 搜索'}<span>${new Date(j.created*1000).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})}</span></div><h3>${esc(j.query)}</h3><p class="${j.status==='failed'?'error':''}">${esc(j.error||j.result?.message||j.stage)}</p>${j.progress&&j.status==='running'?`<p class="job-progress">${esc(j.progress)}</p>`:''}${j.kind==='import'&&j.status==='completed'?`<button class="secondary" data-open-imported="${j.result?.paper_id}">打开论文 ↗</button>`:''}${j.kind==='search'&&j.status==='completed'?`<button class="secondary" data-open-search="${j.id}">查看结果 ↗</button>`:''}${j.kind==='chat'&&j.paper_id?`<button class="secondary" data-open-chat="${j.paper_id}">打开对话 ↗</button>`:''}${['queued','running'].includes(j.status)?`<button class="text-button" data-cancel-job="${j.id}">取消</button>`:''}${['failed','cancelled','interrupted'].includes(j.status)?`<button class="secondary" data-retry-job="${j.id}">重试 ↗</button>`:''}<button class="text-button job-log" data-job-log="${j.id}">进度</button><div class="job-events" id="events-${j.id}">${expandedJobs.get(j.id)||''}</div></article>`).join(''):'<div class="empty">暂无任务</div>';
+  $('#job-list').innerHTML=latest.length?latest.map(j=>`<article class="job"><div class="job-kind">${j.kind==='import'?'arXiv → 文献库':j.kind==='chat'?'论文问答':j.kind==='global'?'研究台':'AI 搜索'}<span>${new Date(j.created*1000).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})}</span></div><h3>${esc(j.query)}</h3><p class="${j.status==='failed'?'error':''}">${esc(j.error||j.result?.message||j.stage)}</p>${j.progress&&j.status==='running'?`<p class="job-progress">${esc(j.progress)}</p>`:''}${j.kind==='import'&&j.status==='completed'?`<button class="secondary" data-open-imported="${j.result?.paper_id}">打开论文 ↗</button>`:''}${j.kind==='import'&&j.result?.session_id?`<button class="secondary" data-import-session="${j.result.session_id}">Codex 会话 ↗</button>`:''}${j.kind==='search'&&j.status==='completed'?`<button class="secondary" data-open-search="${j.id}">查看结果 ↗</button>`:''}${j.kind==='chat'&&j.paper_id?`<button class="secondary" data-open-chat="${j.paper_id}">打开对话 ↗</button>`:''}${['queued','running'].includes(j.status)?`<button class="text-button" data-cancel-job="${j.id}">取消</button>`:''}${['failed','cancelled','interrupted'].includes(j.status)?`<button class="secondary" data-retry-job="${j.id}">重试 ↗</button>`:''}<button class="text-button job-log" data-job-log="${j.id}">进度</button><div class="job-events" id="events-${j.id}">${expandedJobs.get(j.id)||''}</div></article>`).join(''):'<div class="empty">暂无任务</div>';
 }
 async function pollJobs(){
   if(polling)return;polling=true;
@@ -142,6 +152,7 @@ async function search(){
 document.addEventListener('click',async e=>{
   const b=e.target.closest('button');if(!b)return;
   try{
+    if(b.dataset.importSession){await openImportSession(b.dataset.importSession);return;}
     if(b.dataset.assignDomain){await workspace.domains(byId(b.dataset.assignDomain));return;}
     if(b.dataset.scope||b.dataset.domain||b.dataset.collection||b.dataset.topic)workspace.close();
     if(b.dataset.read){$('.app').inert=true;$('#drawer').inert=true;await reader.open(byId(b.dataset.read));return;}

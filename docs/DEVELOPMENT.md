@@ -13,7 +13,9 @@ The Electron main process owns the desktop window, directory chooser, encrypted 
 - `harness.py`: native persistent Codex threads, model catalog/defaults, turn state, resumability, streaming snapshots, explicit approvals and user replies. No shortened JSON answer schema.
 - `paper_tools.py`: scope-checked catalog pagination, full PDF page-range reads and actual page images exposed as Codex dynamic tools.
 - `public/harness-chat.js`: shared conversation UI, model/effort selectors, streamed Markdown, activity, stop, history and approval controls.
-- `importer.py`: constrained downloads and safe extraction, resumable translation with structural invariants, restricted XeLaTeX compilation, full-text note generation and registry-based classification.
+- `agent_import.py`: durable import-job bridge to the same native Codex session, independent import model/effort and explicit skill attachment. Retries resume the native thread.
+- `agent_import_tools.py`: deterministic downloads, immutable source checks, compiler diagnostics, page/image tools with coverage records, and final archive validation. No nested AI calls.
+- `importer.py`: API fallback, constrained downloads and safe extraction, resumable translation with structural invariants, restricted XeLaTeX compilation, full-text note generation and registry-based classification.
 - `skills/arxiv-translate/`: portable workflow instructions for external automation and manual repair.
 
 ## Verification
@@ -35,6 +37,8 @@ The initial local verification used 30 passing automated tests, a real XeLaTeX s
 
 The 0.2 verification passed 37 automated tests and exercised a real Codex app-server: a complete 13-page PDF read, original chart images, a substantial untruncated answer, same-thread continuation after restarting the backend, collection-scoped reading, interruption, and page-link navigation. The shared UI was checked with real model/effort choices, formula rendering and preserved older records.
 
+The 0.3 suite passes 45 tests, including explicit skill attachment, independent import defaults, same-thread import retries, immutable sources, mathematical damage rejection, complete PDF coverage and current translated page images. A streaming regression case covers native command items whose initial output is null. Compilation and finalization are separate checks; an interrupted agent cannot mark an unfinished package complete.
+
 ## Known boundaries
 
 - Native Codex can browse all papers in the selected scope; its context window and decisions still limit actual coverage. Each text-tool call reads at most 20 pages, with further ranges available. No six-paper or total-text cap is imposed on a Codex conversation.
@@ -42,7 +46,10 @@ The 0.2 verification passed 37 automated tests and exercised a real Codex app-se
 - Dynamic tools and additional context use experimental app-server fields. Protocol compatibility was tested with CLI 0.162.1; older versions may require an upgrade. Model lists are obtained dynamically.
 - The app owns a stdio app-server, not the Codex desktop window. Native thread IDs and model context are shared through Codex's persisted history. The app stores its own rendered transcript; turns added by another client are not imported into that transcript.
 - Shell/file-change approvals and Codex question prompts are handled in-app. Unsupported server interactions (including MCP elicitation forms) are explicitly rejected and reported, rather than silently approved.
-- Translation preserves command/math/reference structure and checks compilation, but uncommon templates can require manual repair. Sources without text or without LaTeX are not automatically OCR-translated.
+- Native translation uses Codex to edit the whole TeX tree and repair compilation; the bundled skill calls for source/terminology review and actual PDF images. Finalization requires all original pages read through the PDF tool and title/middle/final translated page images from the current compiled PDF, plus the required artifacts. These checks do not prove perfect semantic fidelity or typography. Uncommon templates and missing TeX packages may still need user attention. Sources without usable text or LaTeX are not automatically OCR-translated.
+- API fallback validates command/reference structure and the multiset of mathematical expressions; Chinese prose reordering alone must not fail validation.
+- Native imports permit writes in the selected vault. The agent is instructed to work only on the selected paper; deterministic tools enforce its arXiv scope, preserve original source hashes and use the registry for final destination. Keep manual notes and review decisions separate from Agent artifacts.
+- Import model and effort default independently to `gpt-6.1-sol` / `medium`. Unavailable models fail explicitly rather than silently switching. A custom skill must be a readable absolute `SKILL.md` path; its content is injected through the protocol skill input.
 - Virtual domain changes do not rewrite Obsidian index notes. External skill-assisted curation may maintain those notes separately.
 - API cancellation discards the eventual answer locally; an already sent upstream HTTP request can continue until its timeout and may still incur provider charges.
 - A Codex executable must be discoverable in PATH/common CLI directories or selected in Settings. The app uses the user's existing login and does not distribute or copy it.
