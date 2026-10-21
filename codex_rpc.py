@@ -22,7 +22,7 @@ class CodexRPC:
         threading.Thread(target=self._read, daemon=True).start()
         try:
             self.call("initialize", {
-                "clientInfo": {"name": "paper_archive", "title": "Paper Archive", "version": "0.7.0"},
+                "clientInfo": {"name": "paper_archive", "title": "Paper Archive", "version": "0.7.1"},
                 "capabilities": {"experimentalApi": True},
             })
             self.send({"method": "initialized", "params": {}})

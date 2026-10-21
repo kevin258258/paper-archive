@@ -17,12 +17,19 @@ import library as lib
 
 SKILL = lib.BASE / "skills/arxiv-translate/SKILL.md"
 POOL = ThreadPoolExecutor(max_workers=3)
-IMPORT_POOL = ThreadPoolExecutor(max_workers=1)
-IMPORT_LOCK = threading.Lock()
+# Independent packages and Codex threads can run together. Keep a separate pool
+# so long translations cannot starve search or ordinary conversations.
+IMPORT_POOL = ThreadPoolExecutor(max_workers=25)
+SOURCE_LOCKS = {}
 CREATE_LOCK = threading.Lock()
 PROCESSES = {}
 CANCELLED = set()
 TERMINAL = {"completed", "failed", "cancelled", "interrupted"}
+
+
+def source_lock(kind, source):
+    with CREATE_LOCK:
+        return SOURCE_LOCKS.setdefault((kind, source), threading.Lock())
 
 
 def event(uid, message):
@@ -95,6 +102,7 @@ def create(kind, query, submit=True):
             if kind == 'blog':
                 import articles
                 existing = articles.find(query)
+                if existing and articles.needs_repair(query): existing = None
                 known = {'paper_id': existing['id'], 'duplicate': True, 'message': 'Blog 已在库中，直接打开'} if existing else None
             else:
                 known = existing_result(query) if kind == 'import' else None
@@ -393,7 +401,7 @@ def import_paper(uid, arxiv):
     # A completed paper can open even while another paper is being translated.
     if result := existing_result(arxiv):
         return result
-    with IMPORT_LOCK:
+    with source_lock('import', lib.arxiv_base(arxiv)):
         if uid in CANCELLED:
             raise InterruptedError()
         update(uid, stage="检查是否已收录")
@@ -424,7 +432,7 @@ def run(uid):
             result = intake.run(uid)
         elif job['kind'] == 'blog':
             import blog_import
-            with IMPORT_LOCK:
+            with source_lock('blog', job['query']):
                 result = blog_import.run(uid, job['query'])
         elif job["kind"] == "global":
             import global_chat

@@ -46,6 +46,8 @@ class ArticleTests(unittest.TestCase):
         for block in value['blocks']:
             # Synthetic translator preserves every protected span.
             articles.set_translation(URL, block['index'], block['original']+' 中文译文。')
+        articles.review_translation(URL, 1, len(value['blocks']))
+        articles.review_translation(URL, 1, len(value['blocks']), True)
         return value, folder
 
     def archive(self):
@@ -63,6 +65,80 @@ class ArticleTests(unittest.TestCase):
         self.assertTrue((folder/'source.html').exists())
         self.assertEqual(len(list((folder/'images').glob('*.png'))), 1)
         self.assertEqual(value['related_arxiv'], ['2406.02469'])
+
+    def test_distill_embedded_figures_and_equations_survive_markdown(self):
+        import base64
+        html = '<article><h1>Research</h1><p>' + 'Full scientific evidence and qualifications. ' * 6 + '</p><p>We minimize <d-math>L = \\frac{x_1^2}{2}</d-math>.</p><d-math block>W_Q^TW_K</d-math><figure><img alt="Plot" src="data:image/PNG;base64,'+base64.b64encode(PNG).decode()+'"/><figcaption>Full caption.</figcaption></figure><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><rect width="20" height="20"/></svg></article>'
+        with patch.object(articles, 'fetch', return_value=(html.encode(), 'text/html', normalize_url(URL))):
+            value, folder = articles.prepare(URL)
+        full = '\n'.join(b['original'] for b in value['blocks'])
+        self.assertEqual(full.count('/article-asset/'), 2)
+        self.assertIn('$L = \\frac{x_1^2}{2}$', full)
+        self.assertIn('$$W_Q^TW_K$$', full)
+        self.assertEqual(len(value['images']), 2)
+        self.assertEqual(value['warnings'], [])
+
+    def test_summary_cannot_pass_for_full_translation(self):
+        value, folder = articles.prepare(URL)
+        original = ('The proposed method measures feature activations across all layers and all token positions. '
+                    'The experiment uses 128 prompts, and the results only support the claim under these assumptions. '
+                    'We do not claim this result generalizes to other architectures or other training distributions. ')*5
+        value['blocks'] = [{'index': 1, 'original': original, 'chinese': ''}]
+        articles.write(folder/'article.json', value)
+        with self.assertRaisesRegex(ValueError, '压缩|完整|过短'):
+            articles.set_translation(URL, 1, '本文研究特征。')
+
+    def test_formula_only_does_not_need_fabricated_chinese(self):
+        value, folder = articles.prepare(URL)
+        value['blocks'] = [{'index': 1, 'original': '$W_Q^TW_K$', 'chinese': ''}]
+        articles.write(folder/'article.json', value)
+        articles.set_translation(URL, 1, '$W_Q^TW_K$')
+
+    def test_review_is_invalidated_after_any_translation_edit(self):
+        value, folder = self.translate()
+        articles.set_translation(URL, 1, '# 再次修改标题')
+        with self.assertRaisesRegex(ValueError, '先读取'):
+            articles.review_translation(URL, 1, 1, True)
+        with self.assertRaisesRegex(ValueError, '复核'):
+            articles.finish(URL, {'chinese_title': '理解特征', 'domain_id': self.domain['id'], 'reason': '全文讨论内部特征'})
+        articles.review_translation(URL, 1, 1)
+        articles.review_translation(URL, 1, 1, True)
+        articles.finish(URL, {'chinese_title': '理解特征', 'domain_id': self.domain['id'], 'reason': '全文讨论内部特征'})
+
+    def test_legacy_repair_retains_annotations_collections_and_recoverable_files(self):
+        receipt=self.archive()
+        paper=lib.paper(receipt['paper_id']); folder=Path(paper['files']['article']).parent
+        value=json.loads((folder/'article.json').read_text());value.pop('extraction_version',None)
+        for block in value['blocks']: block.pop('review_sha256',None)
+        articles.write(folder/'article.json',value)
+        lib.save_reading(paper['id'], {'highlights':[{'id':'abcd','page':2,'language':'original','text':'interpretable features','rects':[],'comment':'我的注释'}]})
+        collection=collections_store.save({'name':'保留收藏'})
+        collections_store.assign(paper['id'],[collection['id']])
+        original=(folder/'original.md').read_text()
+        repaired,_=articles.repair(URL)
+        self.assertEqual(repaired['extraction_version'],2)
+        self.assertFalse(repaired['completed'])
+        lib.refresh()
+        self.assertEqual(lib.paper(paper['id'])['record']['id'],paper['id'])
+        self.assertEqual((folder/'backups/extraction-v1/original.md').read_text(),original)
+        with lib.db() as c:
+            state=json.loads(c.execute('SELECT data FROM reading WHERE id=?',(paper['id'],)).fetchone()[0])
+        self.assertEqual(state['highlights'][0]['comment'],'我的注释')
+        self.assertEqual(state['highlights'][0]['page'],2)
+        self.assertTrue((folder/'backups/extraction-v1/reading.json').exists())
+        self.assertGreater(sum(bool(b['chinese']) for b in repaired['blocks']),0)
+        with patch.object(jobs.IMPORT_POOL, 'submit') as submit:
+            job=jobs.create('blog',URL)
+        self.assertEqual(job['status'],'queued');submit.assert_called_once()
+
+    def test_anchors_and_script_driven_figures_are_not_silently_discarded(self):
+        html='<article><h2 id="original-anchor">Findings</h2><p>'+'Scientific evidence with complete results. '*6+'</p><div data-args="sample"></div></article>'
+        with patch.object(articles, 'fetch',return_value=(html.encode(),'text/html',normalize_url(URL))):
+            value,_=articles.prepare(URL)
+        self.assertIn('original-anchor',value['blocks'][0]['anchors'])
+        self.assertFalse(value['source_complete'])
+        self.assertTrue(value['warnings'])
+        self.assertIn('交互图表', '\n'.join(b['original'] for b in value['blocks']))
 
     def test_mixed_batch_normalizes_tracking_deduplicates_and_validates_all_first(self):
         with patch.object(jobs.IMPORT_POOL, 'submit') as submit:
@@ -185,7 +261,7 @@ class ArticleTests(unittest.TestCase):
 
     def test_svg_preserves_local_plot_shapes_and_removes_active_external_content(self):
         svg = b'''<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><defs><path id="curve" d="M0 0 L10 10"/><clipPath id="clip"><rect width="20" height="20"/></clipPath></defs><g clip-path="url(#clip)"><use xlink:href="#curve"/></g><use href="https://evil.test/plot.svg"/><script>bad()</script><animate attributeName="href" values="https://evil.test"/><rect onload="bad()" style="fill:url(https://evil.test)"/></svg>'''
-        kind, body = articles.image_bytes(svg, 'image/svg+xml')
+        kind, body = articles.image_bytes(svg, 'text/plain')
         self.assertEqual(kind, 'svg')
         self.assertIn(b'#curve', body)
         self.assertIn(b'url(#clip)', body)

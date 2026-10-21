@@ -84,6 +84,26 @@ class BatchImportTests(unittest.TestCase):
         self.assertEqual(calls, ['2501.10001', '2501.10002'])
         self.assertEqual([jobs.get(j['id'])['status'] for j in batch['jobs']], ['failed', 'completed'])
 
+    def test_real_import_dispatch_runs_distinct_sources_concurrently(self):
+        import blog_import
+        entered, release = threading.Barrier(26), threading.Event()
+        def work(*args):
+            entered.wait(timeout=3)
+            release.wait(timeout=4)
+            return {'paper_id': 'synthetic'}
+        with patch.object(blog_import, 'run', side_effect=work), patch.object(jobs, 'existing_result', return_value=None), patch('agent_import.run', side_effect=work), patch('settings.read', return_value={'import_mode':'codex'}), patch.object(lib, 'refresh'), patch.object(lib, 'find_arxiv', return_value=None):
+            batch=[jobs.create('blog', 'https://research.example.org/'+str(i)) for i in range(24)]
+            batch.append(jobs.create('import', '2501.10009'))
+            try:
+                entered.wait(timeout=3)
+                self.assertEqual([jobs.get(j['id'])['status'] for j in batch], ['running']*25)
+            finally:
+                release.set()
+                # Both must leave their workers before the temporary database closes.
+                import time
+                deadline=time.monotonic()+5
+                while time.monotonic()<deadline and any(jobs.get(j['id'])['status'] in ('queued','running') for j in batch): time.sleep(.01)
+
     def test_archived_papers_open_without_waiting_for_import_queue(self):
         result = {'paper_id': 'existing', 'duplicate': True, 'message': '已在库中，直接打开'}
         with patch.object(jobs, 'existing_result', return_value=result), \

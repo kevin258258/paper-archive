@@ -3,6 +3,8 @@ from pathlib import Path
 from datetime import datetime, timezone
 from urllib.parse import urljoin, urlsplit
 import hashlib
+import base64
+from urllib.parse import unquote_to_bytes
 import json
 import re
 import threading
@@ -14,6 +16,9 @@ import taxonomy
 from web_sources import normalize_url, source_id, fetch
 
 LOCK = threading.RLock()
+EXTRACTION_VERSION = 2
+PAGE_LIMIT = 64_000_000
+IMAGE_LIMIT = 16_000_000
 PROTECTED = re.compile(r'```[\s\S]*?```|`[^`\n]+`|!\[[^\]]*\]\([^\n]*?\)|(?<=\]\()[^\s)]+|\$\$[\s\S]*?\$\$|(?<![\\\w])\$[^\n$]+?\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)')
 
 
@@ -39,7 +44,7 @@ def image_bytes(body, mime):
     if body.startswith((b'GIF87a', b'GIF89a')): return 'gif'
     if body[:4] == b'RIFF' and body[8:12] == b'WEBP': return 'webp'
     if b'ftypavif' in body[:32]: return 'avif'
-    if 'image/svg+xml' in mime:
+    if 'image/svg+xml' in mime.lower() or b'<svg' in body[:1024].lower():
         import xml.etree.ElementTree as ET
         try: root = ET.fromstring(body)
         except ET.ParseError as exc: raise ValueError('无法读取 SVG 图片') from exc
@@ -71,6 +76,13 @@ def extract(html, url, uid, path):
     if not published and soup.find('time'): published = soup.find('time').get('datetime', '')
     metadata = dict(title=title, authors=[author] if author else [], published=published,
                     site=meta('og:site_name') or urlsplit(url).hostname, abstract=meta('description', 'og:description'))
+    if not metadata['authors']:
+        metadata['authors'] = [re.sub(r'[∗*†‡,]+', '', a.get_text(' ',strip=True)).strip() for a in soup.select('.d-byline .author')]
+    if not metadata['published']:
+        published_node=soup.select_one('.d-byline .published div')
+        if published_node:
+            try: metadata['published']=datetime.strptime(published_node.get_text(strip=True),'%b %d, %Y').date().isoformat()
+            except ValueError: pass
     for script in soup.find_all('script', type='application/ld+json'):
         try:
             data = json.loads(script.string or script.get_text())
@@ -83,39 +95,135 @@ def extract(html, url, uid, path):
                 if not metadata['authors']: metadata['authors'] = [n for n in names if n]
                 if not metadata['published']: metadata['published'] = str(item.get('datePublished', ''))
         except (ValueError, TypeError, AttributeError): pass
-    for math in list(soup.select('script[type^="math/tex"]')):
-        tex = math.get_text()
-        math.replace_with(' $$'+tex+'$$ ' if 'mode=display' in math.get('type', '') else ' $'+tex+'$ ')
-    # Restrict extraction to the principal article; never execute author scripts.
-    for node in soup.select('nav,footer,aside,script,style,noscript,iframe,form,button,input,select,textarea,svg:has(script),[hidden],[aria-hidden="true"],.katex-html'):
+    # Keep TeX out of Markdown conversion: markdownify otherwise consumes its
+    # backslashes/underscores, and custom Distill tags lose equation boundaries.
+    equations = {}
+    def equation(node, tex, display=False):
+        token = 'PAPEREXTRACTMATH' + str(len(equations)) + 'END'
+        equations[token] = ('$$' if display else '$') + tex.strip() + ('$$' if display else '$')
+        node.replace_with(' ' + token + ' ')
+    for math in list(soup.select('d-math,script[type^="math/tex"],.math[data-tex],math[alttext],annotation[encoding="application/x-tex"]')):
+        if math.parent is None: continue
+        container = math.find_parent(class_='katex') or math.find_parent('math') or math
+        tex = math.get('data-tex') or math.get('alttext') or math.get_text()
+        display = 'block' in math.attrs or container.get('display') == 'block' or 'mode=display' in math.get('type','') or bool(container.find_parent(class_='katex-display'))
+        equation(container, tex, display)
+    for node in soup.select('nav,footer,aside,script,style,noscript,iframe,form,button,input,select,textarea,[hidden],[aria-hidden="true"],.katex-html'):
         node.decompose()
     root = soup.find('article') or soup.find('main') or soup.find(attrs={'role': 'main'})
+    if root is None and soup.find('d-article'):
+        root=soup.new_tag('article')
+        for section in list(soup.select('d-article,d-appendix')): root.append(section.extract())
     if root is None:
         candidates = soup.select('.post-content,.entry-content,.article-content,.markdown,.prose,#content')
         root = max(candidates, key=lambda n: len(n.get_text()), default=soup.body or soup)
-    for math in list(root.select('annotation[encoding="application/x-tex"],script[type^="math/tex"],.math[data-tex],math[alttext]')):
-        tex = math.get('data-tex') or math.get('alttext') or math.get_text()
-        container = math.find_parent(class_='katex') or math.find_parent('math') or math
-        container.replace_with(' $$' + tex + '$$ ' if container.name == 'math' and container.get('display') == 'block' else ' $' + tex + '$ ')
+    # Distill footnotes are prose, not invisible tags concatenated with sentences.
+    for note in root.find_all('d-footnote'):
+        note.insert_before('（注：'); note.insert_after('）'); note.unwrap()
+    for cite in root.find_all('d-cite'):
+        if not cite.get_text(strip=True) and cite.get('key'):
+            cite.string = ' [' + cite['key'] + '] '
     assets, warnings = {}, []
+    total_bytes = 0
+    def save_image(key, body, mime):
+        nonlocal total_bytes
+        if key in assets: return assets[key]
+        if len(body) > IMAGE_LIMIT or total_bytes + len(body) > 200_000_000:
+            raise ValueError('文章图片超过离线保存大小限制')
+        if len(assets) >= 200: raise ValueError('图片数量超过 200 张')
+        kind = image_bytes(body, mime)
+        if isinstance(kind, tuple): kind, body = kind
+        name = hashlib.sha256(body).hexdigest()[:24] + '.' + kind
+        (path / 'images').mkdir(exist_ok=True)
+        (path / 'images' / name).write_bytes(body)
+        total_bytes += len(body)
+        assets[key] = name
+        return name
+    # Static snapshots of known Distill figure components; never execute webpage JS.
+    for component in root.select('.sn-figma-div[data-args]'):
+        try:
+            try: args = json.loads(component['data-args'])
+            except ValueError:
+                import ast
+                args = ast.literal_eval(component['data-args'][:2000])
+            if not isinstance(args, dict): raise ValueError('无效图表参数')
+            slug = args.get('figma_slug', '')
+            if not re.fullmatch(r'[A-Za-z0-9_-]{1,160}', slug): raise ValueError('无效图表资源名')
+            image = soup.new_tag('img', src=urljoin(url, 'figma/' + slug + '.svg'), alt=slug)
+            component.append(image)
+        except (ValueError, TypeError):
+            warnings.append('动态 SVG 图表无法提取，请打开原文查看')
+    # Inline SVG must become an offline image too, rather than disappearing as text.
+    for svg in list(root.find_all('svg')):
+        try:
+            raw = str(svg)
+            for low, camel in (('viewbox','viewBox'),('preserveaspectratio','preserveAspectRatio'),('clippath','clipPath'),('lineargradient','linearGradient'),('radialgradient','radialGradient'),('gradientunits','gradientUnits'),('gradienttransform','gradientTransform')):
+                raw = re.sub(r'(?<=[ <])'+low+r'(?=[ =>])', camel, raw)
+            name = save_image('inline-svg:' + hashlib.sha256(raw.encode()).hexdigest(), raw.encode(), 'image/svg+xml')
+            svg.replace_with(soup.new_tag('img', src=f'/article-asset/{uid}/{name}', alt='SVG diagram'))
+        except (ValueError, OSError) as exc:
+            warnings.append('内嵌图表未能保存：' + str(exc)[:140]); svg.replace_with('[内嵌图表缺失，请查看原文]')
+    # Download independent remote figures concurrently, with a bounded live
+    # window: completed bodies are immediately saved and released from memory.
+    remote_sources = set()
+    for image in root.find_all('img'):
+        src = image.get('data-src') or image.get('src') or ''
+        if not src or src.lower().startswith('data:') or src.startswith(f'/article-asset/{uid}/'): continue
+        try: remote_sources.add(normalize_url(urljoin(url, src)))
+        except ValueError: pass
+    download_errors = {}
+    from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+    with ThreadPoolExecutor(max_workers=6) as downloads:
+        sources = iter(sorted(remote_sources)[:200])
+        pending = {}
+        def replenish():
+            while len(pending)<6:
+                remote = next(sources, None)
+                if remote is None: break
+                pending[downloads.submit(fetch, remote, IMAGE_LIMIT)] = remote
+        replenish()
+        while pending:
+            done, _ = wait(pending, return_when=FIRST_COMPLETED)
+            for future in done:
+                remote = pending.pop(future)
+                try:
+                    body, mime, _ = future.result()
+                    save_image(remote, body, mime)
+                except (OSError, ValueError, RuntimeError) as exc: download_errors[remote]=str(exc)[:140]
+            replenish()
     for image in list(root.find_all('img')):
         src = image.get('data-src') or image.get('src') or ''
-        if (not src or src.startswith('data:')) and image.get('srcset'): src = image['srcset'].split(',')[-1].strip().split(' ')[0]
+        if src.startswith(f'/article-asset/{uid}/'): continue
+        if not src and image.get('srcset'): src = image['srcset'].split(',')[-1].strip().split(' ')[0]
         try:
-            remote = normalize_url(urljoin(url, src))
-            if remote not in assets:
-                if len(assets) >= 40: raise ValueError('图片数量超过 40 张')
-                body, mime, _ = fetch(remote, 8_000_000)
-                kind = image_bytes(body, mime)
-                if isinstance(kind, tuple): kind, body = kind
-                name = hashlib.sha256(body).hexdigest()[:24] + '.' + kind
-                (path / 'images').mkdir(exist_ok=True)
-                (path / 'images' / name).write_bytes(body)
-                assets[remote] = name
-            image.attrs = {'src': f'/article-asset/{uid}/{assets[remote]}', 'alt': image.get('alt', '')}
+            if src.lower().startswith('data:'):
+                head, encoded = src.split(',', 1)
+                if len(encoded) > IMAGE_LIMIT * 1.5: raise ValueError('内嵌图片过大')
+                mime = head[5:].split(';')[0].lower()
+                body = base64.b64decode(re.sub(rb'\s+', b'', unquote_to_bytes(encoded)), validate=True) if ';base64' in head.lower() else unquote_to_bytes(encoded)
+                remote = 'embedded:' + hashlib.sha256(body).hexdigest()
+                name = save_image(remote, body, mime)
+            else:
+                if not src: raise ValueError('图片缺少来源')
+                remote = normalize_url(urljoin(url, src))
+                if remote in download_errors: raise ValueError(download_errors[remote])
+                if remote not in assets: raise ValueError('图片数量超过 200 张')
+                name = assets[remote]
+            image.attrs = {'src': f'/article-asset/{uid}/{name}', 'alt': image.get('alt', '')}
         except (OSError, ValueError, RuntimeError) as exc:
             warnings.append('未能离线保存图片：' + str(exc)[:140])
             image.replace_with('[图片未能离线保存：' + image.get('alt', '无说明') + ']')
+    # Empty script-driven visualizations must never silently disappear. Keep a
+    # visible source link and disclose that the offline snapshot is incomplete.
+    dynamic_count = 0
+    for component in root.select('[data-args]'):
+        if component.select_one('img') or component.get_text(strip=True): continue
+        if 'sn-figma-div' in component.get('class', []): continue
+        dynamic_count += 1
+        link = soup.new_tag('a', href=url)
+        link.string = '交互图表：打开原文查看'
+        component.append(link)
+    if dynamic_count: warnings.append(f'{dynamic_count} 个交互图表需在原文网站查看；离线版本仅包含静态正文和可保存图片')
     for link in root.find_all('a'):
         href = link.get('href', '')
         if href.startswith('#'): continue
@@ -135,9 +243,11 @@ def extract(html, url, uid, path):
     blocks = []
     for node in nodes:
         text = markdownify(str(node), heading_style='ATX', bullets='-', keep_inline_images_in=['td', 'th'], escape_underscores=False).strip()
+        for token, tex in equations.items(): text = text.replace(token, tex)
         if not text: continue
         if len(text) > 40000: raise RuntimeError('文章含超长段落，暂不能完整提取')
-        blocks.append({'index': len(blocks) + 1, 'original': text, 'chinese': ''})
+        anchors = ([node.get('id')] if getattr(node, 'get', None) and node.get('id') else []) + ([n['id'] for n in node.select('[id]')] if getattr(node, 'select', None) else [])
+        blocks.append({'index': len(blocks) + 1, 'original': text, 'chinese': '', 'anchors': anchors})
     full = '\n\n'.join(b['original'] for b in blocks)
     if len(full) < 180 or len(full) > 1_000_000 or not blocks:
         raise RuntimeError('没有提取到完整文章正文；可能需要登录或由脚本动态加载。已保留网页，可重试')
@@ -145,7 +255,7 @@ def extract(html, url, uid, path):
     for ident in re.findall(r'https?://(?:www\.)?arxiv\.org/(?:abs|pdf|html)/([^\s)<>]+)', full):
         try: related.append(lib.parse_arxiv(ident.split('?')[0].removesuffix('.pdf')))
         except ValueError: pass
-    return {**metadata, 'blocks': blocks, 'images': assets, 'warnings': warnings, 'related_arxiv': list(dict.fromkeys(related))}
+    return {**metadata, 'extraction_version': EXTRACTION_VERSION, 'source_complete': not warnings, 'blocks': blocks, 'images': assets, 'warnings': warnings, 'related_arxiv': list(dict.fromkeys(related))}
 
 
 def prepare(url):
@@ -154,7 +264,7 @@ def prepare(url):
     path.mkdir(parents=True, exist_ok=True)
     target = path / 'article.json'
     if target.exists(): return json.loads(target.read_text()), path
-    body, mime, final = fetch(url)
+    body, mime, final = fetch(url, PAGE_LIMIT)
     if not any(t in mime.lower() for t in ('text/html', 'application/xhtml+xml', 'text/plain', 'text/markdown')):
         raise RuntimeError('这个链接不是网页文章；PDF 论文请使用 arXiv 链接')
     (path / 'source.html').write_bytes(body)
@@ -191,18 +301,32 @@ def protected(text):
     return PROTECTED.findall(text)
 
 
+def translation_problem(original, translated):
+    if protected(original) != protected(translated):
+        return '译文改变了代码、公式、图片或链接；请保持这些内容逐字不变'
+    prose = PROTECTED.sub('', original)
+    words = re.findall(r"[A-Za-z]+(?:['’-][A-Za-z]+)*", prose)
+    chinese = len(re.findall(r'[\u4e00-\u9fff]', PROTECTED.sub('', translated)))
+    # A conservative omission signal, not a semantic quality score. Proper names,
+    # references and equations can legitimately stay unchanged.
+    if len(words) >= 80 and chinese < len(words) * .8:
+        return '译文疑似被压缩或遗漏：请逐句完整翻译，保留论证、限定条件和细节'
+    if len(words) >= 8 and not chinese:
+        return '此段仍包含未翻译的英文正文'
+    return ''
+
+
 def set_translation(url, index, text):
     with LOCK:
         value, path = prepare(url)
         if type(index) is not int or not 1 <= index <= len(value['blocks']) or not isinstance(text, str) or not text.strip() or len(text) > 100000:
             raise ValueError('无效译文段落')
         original = value['blocks'][index-1]['original']
-        if protected(original) != protected(text):
-            raise ValueError('译文改变了代码、公式、图片或链接；请保持这些内容逐字不变')
-        prose = PROTECTED.sub('', original)
-        if re.search(r'[A-Za-z]{3}', prose) and not re.search(r'[\u4e00-\u9fff]', text):
-            raise ValueError('此段仍包含未翻译的英文正文')
+        problem = translation_problem(original, text)
+        if problem: raise ValueError(problem)
         value['blocks'][index-1]['chinese'] = text.strip()
+        value['blocks'][index-1].pop('review_sha256', None)
+        value['blocks'][index-1].pop('review_seen_sha256', None)
         write(path / 'article.json', value)
     return {'translated': sum(bool(b['chinese']) for b in value['blocks']), 'total': len(value['blocks'])}
 
@@ -230,12 +354,15 @@ def finish(url, data):
         if any(not b['chinese'] for b in value['blocks']) or len(value['read_blocks']) != len(value['blocks']):
             raise ValueError('尚未阅读全文或完成每段翻译；请补齐后再入库')
         for b in value['blocks']:
-            if protected(b['original']) != protected(b['chinese']): raise ValueError('代码或公式校验未通过')
+            problem = translation_problem(b['original'], b['chinese'])
+            if problem: raise ValueError(f"第 {b['index']} 段：{problem}")
+        if value.get('extraction_version', 1) >= 2 and any(b.get('review_sha256') != translation_hash(b) for b in value['blocks']):
+            raise ValueError('请逐段对照复核全文译文，再调用 archive_review_blog_translation 保存复核；修改后需重新核对')
         domain = next((d for d in taxonomy.read()['domains'] if d['id'] == data.get('domain_id') and not d['archived']), None)
         title, reason = data.get('chinese_title'), data.get('reason')
         if not domain or not isinstance(title, str) or not 1 <= len(title) <= 500 or not isinstance(reason, str) or not reason.strip():
             raise ValueError('需要有效领域、中文标题和全文分类依据')
-        value.update(chinese_title=title, classification_reason=reason, primary_domain=domain['id'], completed=True)
+        value.update(chinese_title=title, classification_reason=reason, primary_domain=domain['id'], completed=True, repair_in_progress=False)
         (path / 'chinese.md').write_text('\n\n'.join(b['chinese'] for b in value['blocks']))
         write(path / 'article.json', value)
         meta = {k: v for k, v in value.items() if k not in ('blocks', 'images', 'read_blocks')}
@@ -253,13 +380,13 @@ def finish(url, data):
             shutil.move(str(path), dest)
     lib.refresh()
     record = lib.paper(value['id'])['record']
-    return {'paper_id': record['id'], 'message': 'Blog 已完整翻译并入库', 'duplicate': False, 'warnings': value['warnings']}
+    return {'paper_id': record['id'], 'message': 'Blog 译文已入库' + ('；部分原文交互内容需在线查看' if value['warnings'] else ''), 'duplicate': False, 'warnings': value['warnings']}
 
 
 def document(paper):
     path = Path(paper['files']['article'])
     value = json.loads(path.read_text())
-    return {k: value[k] for k in ('title', 'chinese_title', 'authors', 'site', 'published', 'saved', 'source_url', 'blocks', 'warnings')}
+    return {**{k: value[k] for k in ('title', 'chinese_title', 'authors', 'site', 'published', 'saved', 'source_url', 'blocks', 'warnings')}, 'completed': value.get('completed', False)}
 
 
 def page_text(paper, language, page):
@@ -267,3 +394,107 @@ def page_text(paper, language, page):
     if language not in ('original', 'chinese') or type(page) is not int or not 1 <= page <= len(blocks):
         raise ValueError('无效文章段落')
     return blocks[page-1][language]
+
+
+def translation_hash(block):
+    return hashlib.sha256((block['original'] + '\0' + block['chinese']).encode()).hexdigest()
+
+
+def review_translation(url, start=1, end=None, confirmed=False):
+    with LOCK:
+        value, path = prepare(url)
+        end = min(start + 19, len(value['blocks'])) if end is None else end
+        if type(start) is not int or type(end) is not int or not 1 <= start <= end <= len(value['blocks']) or end-start >= 40:
+            raise ValueError('每次复核 1–40 段')
+        blocks = value['blocks'][start-1:end]
+        if confirmed is True:
+            for b in blocks:
+                problem = translation_problem(b['original'], b['chinese']) if b['chinese'] else '尚未翻译'
+                if problem: raise ValueError(f"第 {b['index']} 段：{problem}")
+            if any(b.get('review_seen_sha256') != translation_hash(b) for b in blocks):
+                raise ValueError('请先读取当前原文与译文对照，修改后重新读取，再确认复核')
+            for b in blocks: b['review_sha256'] = translation_hash(b)
+            write(path/'article.json', value)
+        else:
+            for b in blocks: b['review_seen_sha256'] = translation_hash(b)
+            write(path/'article.json', value)
+        return {'blocks': blocks, 'total': len(value['blocks']), 'confirmed': confirmed is True,
+                'next_block': end+1 if end<len(value['blocks']) else None,
+                'instruction': '逐句对照原文，核对事实、数字、限定语、引文、图注与公式；修正遗漏或摘要后，调用 confirmed=true 确认当前译文。'}
+
+
+def needs_repair(url):
+    path = folder(url)/'article.json'
+    if not path.exists(): return False
+    value = json.loads(path.read_text())
+    return value.get('extraction_version', 1) < EXTRACTION_VERSION or not value.get('completed', False)
+
+
+def repair(url):
+    """Re-extract a legacy snapshot, keeping a recoverable copy and reading anchors.
+
+    Original source.html is unchanged. Exact/near-exact source block matching maps
+    old translations and personal annotations onto the corrected extraction.
+    Every retained translation still needs the new full comparison pass.
+    """
+    import difflib
+    import shutil
+    path = folder(url)
+    old = json.loads((path/'article.json').read_text())
+    if old.get('extraction_version', 1) >= EXTRACTION_VERSION: return old, path
+    backup = path/'backups'/'extraction-v1'
+    backup.mkdir(parents=True, exist_ok=True)
+    for name in ('article.json','original.md','chinese.md','metadata.json'):
+        if (path/name).exists() and not (backup/name).exists(): shutil.copy2(path/name, backup/name)
+    value = extract((path/'source.html').read_bytes(), old['source_url'], old['id'], path)
+    def canonical(text):
+        text = re.sub(r'!\[[^]]*\]\([^\n]*?\)|\[图片未能离线保存：[^]]*\]', 'IMAGE', text)
+        text = text.replace('（注：','').replace('）','').replace('$','')
+        text = re.sub(r'\[[A-Za-z0-9_-]+(?:,[A-Za-z0-9_-]+)*\]', '', text)
+        return re.sub(r'\s+', '', text)
+    before = [canonical(b['original']) for b in old['blocks']]
+    after = [canonical(b['original']) for b in value['blocks']]
+    mapping = {}
+    matcher = difflib.SequenceMatcher(None, before, after, autojunk=False)
+    for tag,a,b,c,d in matcher.get_opcodes():
+        if tag == 'equal': mapping.update({i+1:c+i-a+1 for i in range(a,b)})
+        elif tag == 'replace':
+            available = set(range(c,d))
+            for i in range(a,b):
+                if not available: break
+                j = max(available, key=lambda j:difflib.SequenceMatcher(None,before[i],after[j],autojunk=False).ratio())
+                if difflib.SequenceMatcher(None,before[i],after[j],autojunk=False).ratio() >= .65:
+                    mapping[i+1]=j+1;available.remove(j)
+    for i,j in mapping.items():
+        source = value['blocks'][j-1]['original']; translated = old['blocks'][i-1].get('chinese','')
+        # Reattach TeX delimiters only where the exact unchanged expression exists.
+        for formula in re.findall(r'\$\$[\s\S]*?\$\$|\$[^\n$]+?\$', source):
+            raw = formula.strip('$')
+            if raw in translated and formula not in translated:
+                translated = re.sub(r'(?<![A-Za-z0-9])'+re.escape(raw)+r'(?![A-Za-z0-9])', lambda _:formula, translated, count=1)
+        images = re.findall(r'!\[[^]]*\]\([^\n]*?\)', source)
+        for image in images:
+            translated = re.sub(r'\[图片未能离线保存：[^]]*\]', lambda _:image, translated, count=1)
+        if translated and not translation_problem(source, translated): value['blocks'][j-1]['chinese']=translated
+    # Keep identity, custom metadata, and classification. Rebuilt fields win.
+    value = {**old, **value, 'completed':False, 'repair_in_progress':True, 'read_blocks':[], 'repair_mapping':mapping}
+    original = '\n\n'.join(b['original'] for b in value['blocks'])
+    value['original_sha256'] = hashlib.sha256(original.encode()).hexdigest()
+    with LOCK:
+        write(path/'article.json', value)
+        (path/'original.md').write_text(original)
+        (path/'chinese.md').write_text('\n\n'.join(b['chinese'] for b in value['blocks']))
+        if (path/'metadata.json').exists():
+            write(path/'metadata.json', {k:v for k,v in value.items() if k not in ('blocks','images','read_blocks')})
+        with lib.db() as c:
+            row=c.execute('SELECT data FROM reading WHERE id=?',(old['id'],)).fetchone()
+            if row:
+                state=json.loads(row[0])
+                if not (backup/'reading.json').exists(): write(backup/'reading.json',state)
+                for position in state.get('positions',{}).values():
+                    if 'page' in position: position['page']=mapping.get(position['page'],min(position['page'],len(value['blocks'])))
+                for h in state.get('highlights',[]):
+                    # Preserve every quote/comment even if a source block has changed.
+                    h['page']=mapping.get(h['page'],min(h['page'],len(value['blocks'])))
+                c.execute('UPDATE reading SET data=? WHERE id=?',(json.dumps(state,ensure_ascii=False),old['id']))
+    return value,path

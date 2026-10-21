@@ -233,7 +233,7 @@ def _refresh():
                 files.update(original=str(original), chinese=str(chinese))
                 pages = {'original': len(article['blocks']), 'chinese': len(article['blocks'])}
                 evidence = '\n\n'.join(b['original'] for b in article['blocks'])
-                if not article.get('completed') or not original.exists() or not chinese.exists():
+                if (not article.get('completed') and not article.get('repair_in_progress')) or not original.exists() or not chinese.exists():
                     raise ValueError('文章翻译包尚未完成')
             for key, f in (("original", original), ("chinese", chinese)):
                 if not f or is_blog:

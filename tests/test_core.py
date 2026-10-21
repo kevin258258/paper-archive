@@ -112,10 +112,10 @@ class ImportTests(unittest.TestCase):
         paper = {"id": "paper1", "arxiv": "2406.02469v1"}
         with patch.object(library, "find_arxiv", return_value=paper), \
              patch.object(jobs, "verify_import", return_value=paper), \
-             patch.object(jobs, "IMPORT_LOCK") as lock:
+             patch.object(jobs, "source_lock") as lock:
             result = jobs.import_paper("unused-job", "2406.02469")
         self.assertTrue(result["duplicate"])
-        lock.__enter__.assert_not_called()
+        lock.assert_not_called()
 
     def test_different_explicit_version_is_not_silently_replaced(self):
         with patch.object(library, "find_arxiv", return_value={"arxiv": "2406.02469v1"}):
