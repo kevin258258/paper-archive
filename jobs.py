@@ -71,14 +71,15 @@ def recent():
 
 
 def create(kind, query, submit=True):
-    if kind not in ("import", "blog", "search"):
+    if kind not in ("import", "blog", "search", "collect"):
         raise ValueError("无效任务")
-    if not isinstance(query, str) or not query.strip() or len(query) > 2000:
-        raise ValueError("请输入有效内容（最多 2000 字）")
+    limit = 100000 if kind == 'collect' else 2000
+    if not isinstance(query, str) or not query.strip() or len(query) > limit:
+        raise ValueError(f'请输入有效内容（最多 {limit} 字）')
     if kind == 'blog':
         from web_sources import normalize_url
         query = normalize_url(query)
-    else:
+    elif kind != 'collect':
         query = lib.parse_arxiv(query) if kind == "import" else query.strip()
     with CREATE_LOCK, lib.db() as c:
         rows = c.execute("SELECT id,query FROM jobs WHERE kind=? AND status IN ('queued','running')", (kind,)).fetchall()
@@ -126,6 +127,9 @@ def retry(uid):
     if job['kind'] == 'domain':
         import domain_scan
         return domain_scan.retry(uid)
+    if job['kind'] == 'collect':
+        import intake
+        return intake.retry(uid)
     return create(job["kind"], job["query"])
 
 
@@ -144,7 +148,7 @@ def cancel(uid):
     if job["status"] in TERMINAL:
         return job
     CANCELLED.add(uid)
-    if job['kind'] in ('import', 'blog', 'domain') and (job.get('result') or {}).get('session_id'):
+    if job['kind'] in ('import', 'blog', 'domain', 'collect') and (job.get('result') or {}).get('session_id'):
         import harness
         try:
             harness.interrupt(job['result']['session_id'])
@@ -157,7 +161,7 @@ def cancel(uid):
         except ProcessLookupError:
             pass
     update(uid, status="cancelled", stage="已取消")
-    event(uid, "已停止任务；已生成的论文文件保留，可重试。")
+    event(uid, '已停止识别；已提交的来源任务可在各自卡片中取消。原始输入保留，可重试。' if job['kind'] == 'collect' else '已停止任务；已生成的论文文件保留，可重试。')
     return get(uid)
 
 
@@ -415,6 +419,9 @@ def run(uid):
         if job['kind'] == 'domain':
             import domain_scan
             result = domain_scan.run(uid)
+        elif job['kind'] == 'collect':
+            import intake
+            result = intake.run(uid)
         elif job['kind'] == 'blog':
             import blog_import
             with IMPORT_LOCK:

@@ -65,7 +65,7 @@ def snapshot(uid, revision=None):
 
 
 def listing(kind, paper_id=""):
-    if kind not in ("paper", "library", "import", "domain"):
+    if kind not in ("paper", "library", "import", "domain", "intake"):
         raise ValueError("无效的会话类型")
     with LOCK, lib.db() as c:
         ids = [r["id"] for r in c.execute("SELECT id FROM harness_sessions")]
@@ -185,7 +185,7 @@ def start(uid, data):
     if not isinstance(question, str) or not 1 <= len(question.strip()) <= 100000:
         raise ValueError("请输入问题（最多 100000 字）")
     initial = snapshot(uid)
-    if initial['kind'] in ('import', 'domain'):
+    if initial['kind'] in ('import', 'domain', 'intake'):
         config = settings.read()
         data = {**data, 'model': data.get('model') or config['import_model'],
                 'effort': data.get('effort') or config['import_effort']}
@@ -207,7 +207,7 @@ def start(uid, data):
         if s["status"] in BUSY:
             raise ValueError("当前回答尚未完成，可以先停止")
         s.update(status="starting", error="", model=model, effort=effort, requests=[], cancel_requested=False)
-        turn = {"id": uuid.uuid4().hex, "native_id": None, "question": question.strip(),
+        turn = {"id": uuid.uuid4().hex, "native_id": None, "question": question if initial['kind'] == 'intake' else question.strip(),
                 "context": {"page": page, "language": language, "selection": selection},
                 "items": [], "status": "starting", "model": model, "effort": effort}
         s["turns"].append(turn)
@@ -227,6 +227,9 @@ def _start(uid):
                   "approvalPolicy": "on-request", "approvalsReviewer": "user"}
         importing = s['kind'] == 'import'
         scanning = s['kind'] == 'domain'
+        collecting = s['kind'] == 'intake'
+        if collecting:
+            import intake
         if scanning:
             import domain_scan
         if importing:
@@ -239,8 +242,8 @@ def _start(uid):
             common['sandbox'] = 'workspace-write'
         if not s["thread_id"]:
             result = rpc.call("thread/start", {**common, "ephemeral": False,
-                              "developerInstructions": agent_import.INSTRUCTIONS if importing else domain_scan.INSTRUCTIONS if scanning else paper_tools.INSTRUCTIONS,
-                              "dynamicTools": agent_import_tools.TOOLS if importing else domain_scan.TOOLS if scanning else paper_tools.TOOLS})
+                              "developerInstructions": intake.INSTRUCTIONS if collecting else agent_import.INSTRUCTIONS if importing else domain_scan.INSTRUCTIONS if scanning else paper_tools.INSTRUCTIONS,
+                              "dynamicTools": intake.TOOLS if collecting else agent_import_tools.TOOLS if importing else domain_scan.TOOLS if scanning else paper_tools.TOOLS})
             with LOCK:
                 _load(uid)["thread_id"] = result["thread"]["id"]
                 _save(_load(uid))
@@ -277,6 +280,8 @@ def _start(uid):
         inputs = [{"type": "text", "text": turn["question"]}]
         if importing:
             inputs.append({'type': 'skill', 'name': 'blog-translate' if s.get('source_type') == 'blog' else 'arxiv-translate', 'path': s['skill_path']})
+        if collecting:
+            inputs.append({'type': 'skill', 'name': 'collect-sources', 'path': s['skill_path']})
         result = rpc.call("turn/start", {"threadId": s["thread_id"], "input": inputs,
                           "additionalContext": {"paper_archive": {
                               "kind": "untrusted", "value": json.dumps(context, ensure_ascii=False)}},
@@ -386,7 +391,10 @@ def server_request(rpc, message):
         s = copy.deepcopy(session) if session else None
     if method == "item/tool/call" and s:
         try:
-            if s['kind'] == 'import':
+            if s['kind'] == 'intake':
+                import intake
+                result = intake.execute(s, params['tool'], params.get('arguments', {}))
+            elif s['kind'] == 'import':
                 import agent_import_tools
                 if s.get('source_type') == 'blog':
                     import blog_import

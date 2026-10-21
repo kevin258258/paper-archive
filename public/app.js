@@ -8,7 +8,7 @@ import {PaperMenu} from './paper-menu.js';
 
 let papers=[], reading={}, waiting=[], domains=[], current=[], activePaper=null, jobs=[], drawerMode='', activeSearch=null, searchResult=null;
 const doneJobs=new Set(), expandedJobs=new Map();
-let jobSnapshot="", polling=false;
+let jobSnapshot="", polling=false, pendingIntake=null;
 const state={view:localStorage.getItem('paper-view')||'A',scope:localStorage.getItem('paper-scope')==='waiting'?'waiting':'all',collection:'',domain:'',topic:'',year:'',sourceType:'',cn:false,notes:false,query:'',ai:true,sort:'recent'};
 const topics=['模型增长','循环与推理','强化学习','多模态','智能体','蒸馏','技术报告','评测'];
 const byId=id=>papers.find(p=>p.id===id);
@@ -157,9 +157,9 @@ function showJobs(){
 }
 async function openImportSession(id,kind='import'){
   const dialog=document.createElement('dialog');dialog.className='import-session-dialog';dialog.setAttribute('aria-label',kind==='domain'?'领域回扫 Codex 会话':'翻译入库 Codex 会话');
-  dialog.innerHTML='<div class="dialog-top"><span>'+ (kind==='domain'?'领域回扫':kind==='blog'?'Blog 翻译':'翻译入库') +' · Codex</span><button aria-label="关闭入库会话">×</button></div><section class="import-harness"></section>';
+  dialog.innerHTML='<div class="dialog-top"><span>'+ (kind==='domain'?'领域回扫':kind==='collect'?'原始输入':kind==='blog'?'Blog 翻译':'翻译入库') +' · Codex</span><button aria-label="关闭入库会话">×</button></div><section class="import-harness"></section>';
   document.body.append(dialog);dialog.showModal();
-  const client=new HarnessChat($('.import-harness',dialog),{kind:kind==='blog'?'import':kind,sourceType:kind==='blog'?'blog':'paper',
+  const client=new HarnessChat($('.import-harness',dialog),{kind:kind==='collect'?'intake':kind==='blog'?'import':kind,sourceType:kind==='blog'?'blog':'paper',
     openPaper:async c=>{dialog.close();$('.app').inert=true;await reader.open(byId(c.paper_id));await reader.jump(c.language,c.page);}});
   client.uid=id;dialog.onclose=()=>{client.close();dialog.remove();};$('.dialog-top button',dialog).onclick=()=>dialog.close();
   await client.open();
@@ -169,7 +169,7 @@ function renderJobs(){
   if(drawerMode!=='jobs')return;
   const snapshot=JSON.stringify([jobs,[...expandedJobs]]);if(snapshot===jobSnapshot)return;jobSnapshot=snapshot;
   const latest=jobs.filter((j,i)=>jobs.findIndex(p=>p.kind===j.kind&&p.query===j.query&&p.paper_id===j.paper_id)===i);
-  $('#job-list').innerHTML=latest.length?latest.map(j=>`<article class="job"><div class="job-kind">${j.kind==='domain'?'领域回扫':j.kind==='blog'?'Blog → 文献库':j.kind==='import'?'arXiv → 文献库':j.kind==='chat'?'论文问答':j.kind==='global'?'研究台':'AI 搜索'}<span>${new Date(j.created*1000).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})}</span></div><h3>${esc(j.query)}</h3><p class="${j.status==='failed'?'error':''}">${esc(j.error||j.result?.message||j.stage)}</p>${j.progress&&j.status==='running'?`<p class="job-progress">${esc(j.progress)}</p>`:''}${['import','blog'].includes(j.kind)&&j.status==='completed'?`<button class="secondary" data-open-imported="${j.result?.paper_id}">打开文献 ↗</button>`:''}${j.kind==='domain'&&j.status==='completed'?`<button class="secondary" data-scan-results="${j.id}">匹配结果 ↗</button>`:''}${['import','blog','domain'].includes(j.kind)&&j.result?.session_id?`<button class="secondary" data-import-session="${j.result.session_id}" data-session-kind="${j.kind}">Codex 会话 ↗</button>`:''}${j.kind==='search'&&j.status==='completed'?`<button class="secondary" data-open-search="${j.id}">查看结果 ↗</button>`:''}${j.kind==='chat'&&j.paper_id?`<button class="secondary" data-open-chat="${j.paper_id}">打开对话 ↗</button>`:''}${['queued','running'].includes(j.status)?`<button class="text-button" data-cancel-job="${j.id}">取消</button>`:''}${['failed','cancelled','interrupted'].includes(j.status)?`<button class="secondary" data-retry-job="${j.id}">重试 ↗</button>`:''}<button class="text-button job-log" data-job-log="${j.id}">进度</button><div class="job-events" id="events-${j.id}">${expandedJobs.get(j.id)||''}</div></article>`).join(''):'<div class="empty">暂无任务</div>';
+  $('#job-list').innerHTML=latest.length?latest.map(j=>`<article class="job"><div class="job-kind">${j.kind==='collect'?'Codex · 收集与入库':j.kind==='domain'?'领域回扫':j.kind==='blog'?'Blog → 文献库':j.kind==='import'?'arXiv → 文献库':j.kind==='chat'?'论文问答':j.kind==='global'?'研究台':'AI 搜索'}<span>${new Date(j.created*1000).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})}</span></div><h3>${esc(j.kind==='collect'?j.query.split('\n').find(l=>l.trim())?.slice(0,100)||'文献入库':j.query)}</h3>${j.kind==='collect'?`<details class="intake-original"><summary>原始输入</summary><pre>${esc(j.query)}</pre></details>${j.result?.unresolved?.length?`<ul class="intake-unresolved">${j.result.unresolved.map(x=>`<li>${esc(x)}</li>`).join('')}</ul>`:''}`:''}<p class="${j.status==='failed'?'error':''}">${esc(j.error||j.result?.message||j.stage)}</p>${j.progress&&j.status==='running'?`<p class="job-progress">${esc(j.progress)}</p>`:''}${['import','blog'].includes(j.kind)&&j.status==='completed'?`<button class="secondary" data-open-imported="${j.result?.paper_id}">打开文献 ↗</button>`:''}${j.kind==='domain'&&j.status==='completed'?`<button class="secondary" data-scan-results="${j.id}">匹配结果 ↗</button>`:''}${['import','blog','domain','collect'].includes(j.kind)&&j.result?.session_id?`<button class="secondary" data-import-session="${j.result.session_id}" data-session-kind="${j.kind}">Codex 会话 ↗</button>`:''}${j.kind==='search'&&j.status==='completed'?`<button class="secondary" data-open-search="${j.id}">查看结果 ↗</button>`:''}${j.kind==='chat'&&j.paper_id?`<button class="secondary" data-open-chat="${j.paper_id}">打开对话 ↗</button>`:''}${['queued','running'].includes(j.status)?`<button class="text-button" data-cancel-job="${j.id}">取消</button>`:''}${['failed','cancelled','interrupted'].includes(j.status)?`<button class="secondary" data-retry-job="${j.id}">重试 ↗</button>`:''}<button class="text-button job-log" data-job-log="${j.id}">进度</button><div class="job-events" id="events-${j.id}">${expandedJobs.get(j.id)||''}</div></article>`).join(''):'<div class="empty">暂无任务</div>';
 }
 async function pollJobs(){
   if(polling)return;polling=true;
@@ -179,6 +179,8 @@ async function pollJobs(){
       const detail=await api('/api/jobs/'+j.id);expandedJobs.set(j.id,detail.events.map(ev=>`<p>${esc(ev.message)}</p>`).join(''));
     }
     renderJobs();
+    const intakeJob=jobs.find(j=>j.id===pendingIntake);
+    if(drawerMode==='jobs'&&intakeJob?.result?.session_id){pendingIntake=null;await openImportSession(intakeJob.result.session_id,'collect');}
     const imported=[];
     for(const j of jobs){
       if(!['completed','failed','cancelled','interrupted'].includes(j.status)||doneJobs.has(j.id))continue;
@@ -194,10 +196,10 @@ async function pollJobs(){
     if(imported.length){await loadLibrary();toast(imported.length===1?(imported[0].result?.message||'论文已入库'):`${imported.length} 篇论文已就绪`);}
   }catch(e){$('#connection').textContent='连接中断';}finally{polling=false;}
 }
-function openImport(value=''){$('#import-error').textContent='';$('#arxiv-input').value=value;$('#import-dialog').showModal();$('#arxiv-input').focus();}
+function openImport(value=''){$('#import-error').textContent='';$('#arxiv-input').value=value||localStorage.getItem('paper-import-draft')||'';$('#import-dialog').showModal();$('#arxiv-input').focus();}
 async function submitImport(value){
   const result=await api('/api/imports',{query:value}),ids=new Set(result.jobs.map(j=>j.id));
-  $('#import-dialog').close();jobs=[...result.jobs.reverse(),...jobs.filter(j=>!ids.has(j.id))];showJobs();toast(`已提交 ${result.count} 篇文献，重复链接已合并`);
+  localStorage.removeItem('paper-import-draft');$('#import-dialog').close();jobs=[...result.jobs.reverse(),...jobs.filter(j=>!ids.has(j.id))];pendingIntake=result.mode==='prompt'?result.jobs[0].id:null;showJobs();toast(result.mode==='prompt'?'原始输入已提交给本机 Codex':`已提交 ${result.count} 篇文献`);
 }
 async function search(){
   const query=$('#search').value.trim();state.query=query;
@@ -256,6 +258,7 @@ $('#year').onchange=e=>{state.year=e.target.value;render();};$('#sort').onchange
 $('#mobile-domain').onchange=e=>{state.domain=e.target.value;render();};$('#mobile-topic').onchange=e=>{state.topic=e.target.value;render();};
 $('#density').oninput=e=>document.documentElement.style.setProperty('--cols',e.target.value);
 $('#backdrop').onclick=closeDrawer;$('#open-import').onclick=()=>openImport();$('#open-jobs').onclick=showJobs;
+$('#arxiv-input').oninput=e=>localStorage.setItem('paper-import-draft',e.target.value);
 $('#import-close').onclick=()=>$('#import-dialog').close();
 $('#import-form').onsubmit=async e=>{e.preventDefault();const b=$('button[type=submit]',e.target);b.disabled=true;try{await submitImport($('#arxiv-input').value);}catch(err){$('#import-error').textContent=err.message;}finally{b.disabled=false;}};
 $('#refresh').onclick=async()=>{try{$('#refresh').disabled=true;const r=await api('/api/refresh',{});await loadLibrary();toast(r.warnings.length?r.warnings.join('；'):`已刷新 ${r.count} 篇论文`);}catch(e){toast(e.message);}finally{$('#refresh').disabled=false;}};

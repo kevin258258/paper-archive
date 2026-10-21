@@ -48,7 +48,7 @@ export class HarnessChat {
           <button type="submit" aria-label="发送给 Codex">↑</button></div>
       </form><div class="harness-footer"><span data-status>本机 harness · 读取资料</span><span data-usage></span></div>
       <p class="harness-error error" role="alert"></p>`;
-    if(['import','domain'].includes(options.kind)){for(const action of ['new','legacy'])$('[data-action='+action+']',root).hidden=true;}
+    if(['import','domain','intake'].includes(options.kind)){for(const action of ['new','legacy'])$('[data-action='+action+']',root).hidden=true;}
     $('form',root).onsubmit=e=>{e.preventDefault();this.send();};
     $('textarea',root).onkeydown=e=>{
       if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();if(!busy(this.session))$('form',root).requestSubmit();}
@@ -71,7 +71,7 @@ export class HarnessChat {
   close(){this.closed=true;this.epoch++;clearTimeout(this.timer);}
   error(error){$('.harness-error',this.root).textContent=error?.message||error||'';}
   renderSessions(){
-    $('[data-sessions]',this.root).innerHTML=(['import','domain'].includes(this.options.kind)?'':'<option value="">新对话</option>')+this.sessions.map(s=>`<option value="${s.id}">${esc(s.title)}</option>`).join('');
+    $('[data-sessions]',this.root).innerHTML=(['import','domain','intake'].includes(this.options.kind)?'':'<option value="">新对话</option>')+this.sessions.map(s=>`<option value="${s.id}">${esc(s.title)}</option>`).join('');
     $('[data-sessions]',this.root).value=this.uid||'';
   }
   async switchSession(uid){
@@ -105,6 +105,7 @@ export class HarnessChat {
   }
   pageChanged(){
     const context=this.options.context?.();
+    if(this.options.kind==='intake'){$('.harness-attachment',this.root).textContent='⌑ 原始输入 · 识别来源并安排入库';return;}
     if(this.options.kind==='domain'){$('.harness-attachment',this.root).textContent='⌑ 全库回扫 · 保留主领域与人工排除';return;}
     if(this.options.kind==='import'){$('.harness-attachment',this.root).textContent=this.options.sourceType==='blog'?'⌑ Blog · 全文翻译与离线图文':'⌑ arXiv · 全文翻译、编译与视觉核验';return;}
     $('.harness-attachment',this.root).textContent=context?`⌑ ${this.options.sourceType==='blog'?'完整 Blog':'完整 PDF'} · 当前 ${context.language==='chinese'?'中':'EN'} ${context.page} ${this.options.sourceType==='blog'?'段':'页'}`:'⌑ 范围内的完整论文与 Blog · 正文与图表';
@@ -175,7 +176,7 @@ export class HarnessChat {
     return `<div class="harness-request"><strong>Codex 请求授权</strong><p>${esc(p.reason||'此操作需要你的批准')}</p><pre>${esc(p.command||JSON.stringify(p.permissions||p.changes||item?.changes||{},null,2))}</pre><button data-approval="${r.id}" data-decision="decline">拒绝</button><button data-approval="${r.id}" data-decision="accept">允许这次</button></div>`;
   }
   async send(){
-    const input=$('textarea',this.root),question=input.value.trim();if(!question||this.sending||busy(this.session))return;
+    const input=$('textarea',this.root),question=this.options.kind==='intake'?input.value:input.value.trim();if(!question.trim()||this.sending||busy(this.session))return;
     const epoch=this.epoch;this.sending=true;this.error('');
     try{
       if(!this.caps)throw Error('尚未连接 Codex。点击新对话重试。');
