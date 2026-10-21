@@ -114,6 +114,9 @@ def retry(uid):
     if job["kind"] == "global":
         import global_chat
         return global_chat.retry(uid)
+    if job['kind'] == 'domain':
+        import domain_scan
+        return domain_scan.retry(uid)
     return create(job["kind"], job["query"])
 
 
@@ -132,7 +135,7 @@ def cancel(uid):
     if job["status"] in TERMINAL:
         return job
     CANCELLED.add(uid)
-    if job['kind'] == 'import' and (job.get('result') or {}).get('session_id'):
+    if job['kind'] in ('import', 'domain') and (job.get('result') or {}).get('session_id'):
         import harness
         try:
             harness.interrupt(job['result']['session_id'])
@@ -154,7 +157,11 @@ def recover():
         c.execute("UPDATE jobs SET status='interrupted',stage='服务重启，任务中断',error='可重试，已有文件会复用' WHERE status='running'")
         queued = list(c.execute("SELECT id,kind FROM jobs WHERE status='queued' ORDER BY created,id"))
     for uid, kind in queued:
-        (IMPORT_POOL if kind == 'import' else POOL).submit(run, uid)
+        if kind == 'domain':
+            import domain_scan
+            domain_scan.POOL.submit(run, uid)
+        else:
+            (IMPORT_POOL if kind == 'import' else POOL).submit(run, uid)
 
 
 def cli_args(search=True):
@@ -395,7 +402,10 @@ def run(uid):
     job = get(uid)
     update(uid, status="running", stage="开始处理")
     try:
-        if job["kind"] == "global":
+        if job['kind'] == 'domain':
+            import domain_scan
+            result = domain_scan.run(uid)
+        elif job["kind"] == "global":
             import global_chat
             result = global_chat.answer(uid)
         elif job["kind"] == "chat":

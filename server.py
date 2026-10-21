@@ -24,6 +24,7 @@ import global_chat
 import taxonomy
 import settings
 import harness
+import domain_scan
 
 PORT = int(os.environ.get("PAPER_READER_PORT", "8767"))
 TOKEN = secrets.token_urlsafe(32)
@@ -111,6 +112,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json(harness.snapshot(m[1], query.get("after", [None])[0]))
             if path == "/api/domains":
                 return self.json(taxonomy.read())
+            m = re.fullmatch(r'/api/domain-scans/([a-f0-9]+)', path)
+            if m:
+                value = domain_scan.read(m[1])
+                return self.json({**value, 'titles': {p['id']: p['title'] for p in lib.papers()}})
             if path == "/api/global-chat":
                 return self.json({"turns": global_chat.history()})
             if path == "/api/collections":
@@ -213,12 +218,23 @@ class Handler(BaseHTTPRequestHandler):
                              "interrupt": lambda uid, _: harness.interrupt(uid)}[m[2]]
                 return self.json(operation(m[1], data))
             if path == "/api/domains":
-                return self.json(taxonomy.save(data))
+                return self.json(domain_scan.save_domain(data))
+            if path == '/api/domain-scans':
+                return self.json(domain_scan.start(data.get('domain_ids')), 202)
+            m = re.fullmatch(r'/api/domains/([a-zA-Z0-9]+)/scan', path)
+            if m:
+                return self.json(domain_scan.start([m[1]]), 202)
+            m = re.fullmatch(r'/api/papers/([a-zA-Z0-9]+)/domains/([a-zA-Z0-9]+)/exclude', path)
+            if m:
+                return self.json(taxonomy.exclude(m[1], m[2]))
+            m = re.fullmatch(r'/api/papers/([a-zA-Z0-9]+)/domains/([a-zA-Z0-9]+)/include', path)
+            if m:
+                return self.json(taxonomy.include(m[1], m[2]))
             if path == "/api/global-chat":
                 return self.json(global_chat.start(data), 202)
             m = re.fullmatch(r"/api/papers/([a-zA-Z0-9]+)/domain", path)
             if m:
-                return self.json(taxonomy.assign(m[1], data.get('domain_id')))
+                return self.json(taxonomy.assign(m[1], data.get('domain_id'), data.get('memberships')))
             if path == "/api/jobs":
                 return self.json(jobs.create(data.get("kind"), data.get("query")), 202)
             if path == "/api/imports":

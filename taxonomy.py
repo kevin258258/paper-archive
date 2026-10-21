@@ -62,12 +62,24 @@ def save(data):
         return value
 
 
-def assign(paper_id, domain_id):
+def assign(paper_id, domain_id, memberships=None):
     lib.paper(paper_id)
     with LOCK:
         value = read()
         if not any(d['id'] == domain_id and not d['archived'] for d in value['domains']):
             raise ValueError('请选择有效领域')
+        if memberships is not None:
+            active = {d['id'] for d in value['domains'] if not d['archived']}
+            if not isinstance(memberships, list) or any(not isinstance(d, str) or d not in active for d in memberships):
+                raise ValueError('无效的附加领域')
+            previous = set(value.get('memberships', {}).get(paper_id, []))
+            value.setdefault('memberships', {})[paper_id] = list(dict.fromkeys(memberships))
+            for d in active:
+                excluded = value.setdefault('exclusions', {}).setdefault(d, [])
+                if d in memberships and paper_id in excluded:
+                    excluded.remove(paper_id)
+                elif d != domain_id and d not in memberships and (d in previous or paper_id in value.get('matches', {}).get(d, {})) and paper_id not in excluded:
+                    excluded.append(paper_id)
         value['assignments'][paper_id] = domain_id
         _write(value)
     return {'paper_id': paper_id, 'domain_id': domain_id}
@@ -79,4 +91,41 @@ def apply(record, registry=None):
     value = registry or read()
     ident = value['assignments'].get(record['id'], record['domain'])
     domain = next((d for d in value['domains'] if d['id'] == ident), None)
-    return {**record, 'domain': ident, 'domainName': domain['name'] if domain else record['domainName']}
+    related = []
+    for d in value['domains']:
+        match = value.get('matches', {}).get(d['id'], {}).get(record['id'])
+        if d['id'] in value.get('memberships', {}).get(record['id'], []):
+            match = {'reason': '手动加入此领域', 'manual': True}
+        if match and not d['archived'] and record['id'] not in value.get('exclusions', {}).get(d['id'], []):
+            related.append({'id': d['id'], 'name': d['name'], **match})
+    return {**record, 'domain': ident, 'domainName': domain['name'] if domain else record['domainName'],
+            'domainIds': list(dict.fromkeys([ident] + [d['id'] for d in related])), 'relatedDomains': related}
+
+
+def exclude(paper_id, domain_id):
+    lib.paper(paper_id)
+    with LOCK:
+        value = read()
+        if not any(d['id'] == domain_id for d in value['domains']):
+            raise ValueError('未找到领域')
+        rows = value.setdefault('exclusions', {}).setdefault(domain_id, [])
+        if paper_id not in rows:
+            rows.append(paper_id)
+        _write(value)
+    return {'paper_id': paper_id, 'domain_id': domain_id}
+
+
+def include(paper_id, domain_id):
+    lib.paper(paper_id)
+    with LOCK:
+        value = read()
+        if not any(d['id'] == domain_id and not d['archived'] for d in value['domains']):
+            raise ValueError('请选择有效领域')
+        rows = value.setdefault('memberships', {}).setdefault(paper_id, [])
+        if domain_id not in rows:
+            rows.append(domain_id)
+        excluded = value.setdefault('exclusions', {}).setdefault(domain_id, [])
+        if paper_id in excluded:
+            excluded.remove(paper_id)
+        _write(value)
+    return {'paper_id': paper_id, 'domain_id': domain_id}

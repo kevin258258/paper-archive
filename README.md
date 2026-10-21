@@ -76,6 +76,8 @@ Existing local-reader collections, annotations and conversations are copied usin
 
 Add a domain, describe its scope, then assign papers through their detail view. New automatic classifications consult the current `.paper-archive/taxonomy.json`. Human assignments take precedence. Reassigning an existing paper is virtual, preserving its physical path and Obsidian links. Renaming a domain keeps its stable ID and folder.
 
+New or changed domains automatically queue a whole-library scan unless you uncheck that option. A persistent local Codex session uses your import model/effort, reviews every paper in the captured library snapshot, and verifies positive evidence against real PDF pages. High-confidence matches join the domain automatically; uncertain candidates remain suggestions in the task's results. Each paper can appear in several domains while retaining its primary/manual classification and physical folder. You can add or remove related memberships, and later scans preserve explicit exclusions. Existing domains also have a rescan button. Scans use metadata, Agent notes and relevant PDF pages; they do not imply full reading of every page. API-only domain scanning is not currently provided.
+
 The portable [arxiv-translate skill](skills/arxiv-translate/SKILL.md) contains no personal paths or credentials. In native sessions it guides the agent directly, using deterministic I/O tools for downloads, compilation, PDF inspection and finalization; it never recursively calls the older AI pipeline. It can be installed in your own skills directory; set `PAPER_ARCHIVE_HOME` to this checkout and `PAPER_VAULT_ROOT` to your library for external automation. The app does not require a global skill installation.
 
 ```sh

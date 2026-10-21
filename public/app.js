@@ -3,6 +3,7 @@ import {Reader,markdown} from './reader.js';
 import {Collections} from './collections.js';
 import {Workspace} from './workspace.js';
 import {HarnessChat} from './harness-chat.js';
+import {domainResults} from './domain-results.js';
 
 let papers=[], reading={}, domains=[], current=[], activePaper=null, jobs=[], drawerMode='', activeSearch=null, searchResult=null;
 const doneJobs=new Set(), expandedJobs=new Map();
@@ -10,6 +11,7 @@ let jobSnapshot="", polling=false;
 const state={view:localStorage.getItem('paper-view')||'A',scope:'all',collection:'',domain:'',topic:'',year:'',cn:false,notes:false,query:'',ai:true,sort:'recent'};
 const topics=['模型增长','循环与推理','强化学习','多模态','智能体','蒸馏','技术报告','评测'];
 const byId=id=>papers.find(p=>p.id===id);
+const belongs=(p,id)=>(p.domainIds||[p.domain]).includes(id);
 const saved=id=>reading[id]||{};
 const human=p=>p.human||'未读';
 const number=p=>String(papers.indexOf(p)+1).padStart(3,'0');
@@ -29,6 +31,7 @@ const reader=new Reader($('#reader'),{
 
 const workspace=new Workspace({papers:()=>papers,collections:()=>collections.items,reload:async()=>{await loadLibrary();if(drawerMode==='paper'&&activePaper)detail(byId(activePaper.id));},
   openPaper:async c=>{$('.app').inert=true;await reader.open(byId(c.paper_id));await reader.jump(c.language,c.page);}});
+window.addEventListener('paper-domain-scan',async()=>{await pollJobs();showJobs();});
 $('#open-workspace').onclick=()=>workspace.open().catch(e=>toast(e.message));
 $('#open-settings').onclick=()=>workspace.settings().catch(e=>toast(e.message));
 $('#manage-domains').onclick=()=>workspace.domains().catch(e=>toast(e.message));
@@ -37,7 +40,7 @@ async function loadLibrary(){
   const data=await api('/api/library');papers=data.papers;
   domains=(await api("/api/domains")).domains.filter(d=>!d.archived);
   for(const p of papers)p.searchText=[p.title,p.english,p.arxiv,...p.authors,p.abstract,p.summary,...p.notes.map(n=>n.text)].join(' ').toLowerCase();
-  $('#domain-nav').innerHTML=domains.map(d=>`<button class="domain" data-domain="${d.id}"><span class="domain-name">${esc(d.name)}</span><span class="mono">${String(papers.filter(p=>p.domain===d.id).length).padStart(2,'0')}</span></button>`).join('');
+  $('#domain-nav').innerHTML=domains.map(d=>`<button class="domain" data-domain="${d.id}"><span class="domain-name">${esc(d.name)}</span><span class="mono">${String(papers.filter(p=>belongs(p,d.id)).length).padStart(2,'0')}</span></button>`).join('');
   $('#topic-nav').innerHTML=topics.map(t=>`<button data-topic="${t}">${t}</button>`).join('');
   $('#mobile-domain').innerHTML='<option value="">全部领域</option>'+domains.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join('');
   $('#mobile-topic').innerHTML='<option value="">全部主题</option>'+topics.map(t=>`<option>${t}</option>`).join('');
@@ -47,13 +50,13 @@ async function loadLibrary(){
 function filtered(){
   const hits=new Map((searchResult?.results||[]).map((r,i)=>[r.id,{...r,index:i}]));
   const terms=state.ai?[]:state.query.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  return papers.filter(p=>(!searchResult||hits.has(p.id))&&(!state.domain||p.domain===state.domain)&&(!state.topic||p.topics.includes(state.topic))&&(!state.year||String(p.year)===state.year)&&(!state.cn||p.chinese)&&(!state.notes||p.notes.length)&&(!state.collection||collections.active.find(c=>c.id===state.collection)?.papers.includes(p.id))&&(state.scope!=='marked'||collections.has(p.id))&&(state.scope!=='unread'||p.human==='未读')&&terms.every(t=>p.searchText.includes(t)))
+  return papers.filter(p=>(!searchResult||hits.has(p.id))&&(!state.domain||belongs(p,state.domain))&&(!state.topic||p.topics.includes(state.topic))&&(!state.year||String(p.year)===state.year)&&(!state.cn||p.chinese)&&(!state.notes||p.notes.length)&&(!state.collection||collections.active.find(c=>c.id===state.collection)?.papers.includes(p.id))&&(state.scope!=='marked'||collections.has(p.id))&&(state.scope!=='unread'||p.human==='未读')&&terms.every(t=>p.searchText.includes(t)))
     .sort((a,b)=>searchResult?hits.get(a.id).index-hits.get(b.id).index:state.sort==='title'?a.title.localeCompare(b.title,'zh'):state.sort==='year'?(b.year||0)-(a.year||0):b.created.localeCompare(a.created)||(b.year||0)-(a.year||0));
 }
 function reason(p){const hit=searchResult?.results.find(r=>r.id===p.id);return hit?`<div class="match-reason">${esc(hit.reason)}${hit.uncertainty?`<small>${esc(hit.uncertainty)}</small>`:''}</div>`:'';}
 function gallery(list){return '<div class="gallery">'+list.map(p=>`<article class="paper-card"><button class="cover" data-read="${p.id}" aria-label="阅读 ${esc(p.title)}"><span class="paper-number mono">${number(p)}</span><span class="cover-mark">${collections.has(p.id)?'+':''}</span>${p.thumb?`<img src="${p.thumb}" alt="" loading="lazy">`:''}<span class="cover-bottom"></span><span class="read-affordance">阅读 ↗</span></button><div class="card-meta"><span>${p.year||'—'} / ${p.domain}</span><span>${p.pages.original||p.pages.chinese||'—'} P</span></div><button class="card-title" data-detail="${p.id}" title="${esc(p.title)}">${esc(p.title)}</button><div class="card-foot"><span>${human(p)}</span><span class="format">${p.chinese?'<span>中</span>':''}${p.notes.length?'<span>NOTE</span>':''}</span><button data-mark="${p.id}" aria-label="${collections.has(p.id)?'管理收藏':'收藏到'} ${esc(p.title)}">${collections.has(p.id)?'✓':'+'}</button></div>${reason(p)}</article>`).join('')+'</div>';}
 function catalog(list){return '<table class="catalog"><thead><tr><th class="row-no">NO.</th><th>标题</th><th class="row-domain">领域</th><th class="row-year">年份</th><th class="row-star"></th></tr></thead><tbody>'+list.map(p=>`<tr><td class="row-no">${number(p)}</td><td class="row-title"><button data-read="${p.id}">${esc(p.title)}</button><small>${esc(p.english)}</small>${reason(p)}</td><td class="row-domain">${esc(p.domainName)}</td><td class="row-year">${p.year||'—'}</td><td><button data-detail="${p.id}" aria-label="详情 ${esc(p.title)}">↗</button></td></tr>`).join('')+'</tbody></table>';}
-function matrix(list){return '<div class="matrix"><div class="matrix-inspector" id="matrix-inspector"><strong>—</strong><span>领域 × 文献</span></div>'+domains.map(d=>{const group=list.filter(p=>p.domain===d.id);return group.length?`<section class="matrix-group"><button class="matrix-group-label" data-domain="${d.id}">${esc(d.name)}<span>${d.id} / ${group.length}</span></button><div class="matrix-cells">${group.map(p=>`<button class="matrix-cell ${collections.has(p.id)?'marked':''}" data-read="${p.id}" data-hover="${p.id}" aria-label="阅读 ${esc(p.title)}" title="${esc(p.title)}">${p.thumb?`<img src="${p.thumb}" alt="" loading="lazy">`:''}<span class="matrix-id">${number(p)}</span></button>`).join('')}</div></section>`:'';}).join('')+'</div>';}
+function matrix(list){return '<div class="matrix"><div class="matrix-inspector" id="matrix-inspector"><strong>—</strong><span>领域 × 文献</span></div>'+domains.map(d=>{const group=list.filter(p=>belongs(p,d.id));return group.length?`<section class="matrix-group"><button class="matrix-group-label" data-domain="${d.id}">${esc(d.name)}<span>${d.id} / ${group.length}</span></button><div class="matrix-cells">${group.map(p=>`<button class="matrix-cell ${collections.has(p.id)?'marked':''}" data-read="${p.id}" data-hover="${p.id}" aria-label="阅读 ${esc(p.title)}" title="${esc(p.title)}">${p.thumb?`<img src="${p.thumb}" alt="" loading="lazy">`:''}<span class="matrix-id">${number(p)}</span></button>`).join('')}</div></section>`:'';}).join('')+'</div>';}
 function renderCounts(){
   $('#total').textContent=String(papers.length).padStart(3,'0');
   $('#marked-count').textContent=String(papers.filter(p=>collections.has(p.id)).length).padStart(2,'0');
@@ -85,7 +88,7 @@ function closeDrawer(){drawerMode='';activePaper=null;$('#backdrop').hidden=true
 function detail(p){
   activePaper=p;openDrawer('paper');
   const hit=searchResult?.results.find(r=>r.id===p.id);
-  $('#drawer').innerHTML=`<div class="drawer-top"><span>${esc(p.arxiv||'LOCAL')}</span><button class="close" data-close aria-label="关闭详情">×</button></div><div class="drawer-cover">${p.thumb?`<img src="${p.thumb}" alt="">`:''}</div><h2>${esc(p.title)}</h2><p class="english-title">${esc(p.english)}</p><div class="detail-actions"><button class="primary" data-read="${p.id}">阅读 ↗</button><button class="secondary" data-mark="${p.id}">${collections.has(p.id)?'管理收藏集':'+ 收藏到'}</button></div><dl class="detail-fields"><dt>领域</dt><dd><button class="text-button" data-assign-domain="${p.id}">${esc(p.domainName)} ↗</button></dd><dt>作者</dt><dd>${esc(p.authors.slice(0,7).join(' · '))}</dd><dt>年份</dt><dd>${p.year||'—'}</dd><dt>阅读</dt><dd>${human(p)}</dd></dl>${hit?`<section class="summary"><div class="summary-title">匹配依据</div>${esc(hit.reason)}<blockquote>${esc(hit.evidence)}</blockquote>${hit.uncertainty?`<p>${esc(hit.uncertainty)}</p>`:''}</section>`:''}<section class="summary">${esc(p.summary||p.abstract)}</section><div class="notes-list">${p.notes.map(n=>`<button data-note="${n.key}">${n.label}<span>↗</span></button>`).join('')}</div>`;
+  $('#drawer').innerHTML=`<div class="drawer-top"><span>${esc(p.arxiv||'LOCAL')}</span><button class="close" data-close aria-label="关闭详情">×</button></div><div class="drawer-cover">${p.thumb?`<img src="${p.thumb}" alt="">`:''}</div><h2>${esc(p.title)}</h2><p class="english-title">${esc(p.english)}</p><div class="detail-actions"><button class="primary" data-read="${p.id}">阅读 ↗</button><button class="secondary" data-mark="${p.id}">${collections.has(p.id)?'管理收藏集':'+ 收藏到'}</button></div><dl class="detail-fields"><dt>领域</dt><dd><button class="text-button" data-assign-domain="${p.id}">${esc(p.domainName)} ↗</button></dd>${p.relatedDomains?.filter(d=>d.id!==p.domain).length?`<dt>同时归入</dt><dd>${p.relatedDomains.filter(d=>d.id!==p.domain).map(d=>`<span title="${esc(d.reason)}">${esc(d.name)}</span>`).join(' · ')}</dd>`:''}<dt>作者</dt><dd>${esc(p.authors.slice(0,7).join(' · '))}</dd><dt>年份</dt><dd>${p.year||'—'}</dd><dt>阅读</dt><dd>${human(p)}</dd></dl>${hit?`<section class="summary"><div class="summary-title">匹配依据</div>${esc(hit.reason)}<blockquote>${esc(hit.evidence)}</blockquote>${hit.uncertainty?`<p>${esc(hit.uncertainty)}</p>`:''}</section>`:''}<section class="summary">${esc(p.summary||p.abstract)}</section><div class="notes-list">${p.notes.map(n=>`<button data-note="${n.key}">${n.label}<span>↗</span></button>`).join('')}</div>`;
   $('#drawer').scrollTop=0;$('#drawer .close').focus();
 }
 function showJobs(){
@@ -93,11 +96,11 @@ function showJobs(){
   $('#drawer').innerHTML=`<div class="drawer-top"><span>任务</span><button class="close" data-close aria-label="关闭任务">×</button></div><div id="job-list"></div>`;
   jobSnapshot='';renderJobs();$('#drawer .close').focus();
 }
-async function openImportSession(id){
-  const dialog=document.createElement('dialog');dialog.className='import-session-dialog';dialog.setAttribute('aria-label','翻译入库 Codex 会话');
-  dialog.innerHTML='<div class="dialog-top"><span>翻译入库 · Codex</span><button aria-label="关闭入库会话">×</button></div><section class="import-harness"></section>';
+async function openImportSession(id,kind='import'){
+  const dialog=document.createElement('dialog');dialog.className='import-session-dialog';dialog.setAttribute('aria-label',kind==='domain'?'领域回扫 Codex 会话':'翻译入库 Codex 会话');
+  dialog.innerHTML='<div class="dialog-top"><span>'+ (kind==='domain'?'领域回扫':'翻译入库') +' · Codex</span><button aria-label="关闭入库会话">×</button></div><section class="import-harness"></section>';
   document.body.append(dialog);dialog.showModal();
-  const client=new HarnessChat($('.import-harness',dialog),{kind:'import',
+  const client=new HarnessChat($('.import-harness',dialog),{kind,
     openPaper:async c=>{dialog.close();$('.app').inert=true;await reader.open(byId(c.paper_id));await reader.jump(c.language,c.page);}});
   client.uid=id;dialog.onclose=()=>{client.close();dialog.remove();};$('.dialog-top button',dialog).onclick=()=>dialog.close();
   await client.open();
@@ -107,7 +110,7 @@ function renderJobs(){
   if(drawerMode!=='jobs')return;
   const snapshot=JSON.stringify([jobs,[...expandedJobs]]);if(snapshot===jobSnapshot)return;jobSnapshot=snapshot;
   const latest=jobs.filter((j,i)=>jobs.findIndex(p=>p.kind===j.kind&&p.query===j.query&&p.paper_id===j.paper_id)===i);
-  $('#job-list').innerHTML=latest.length?latest.map(j=>`<article class="job"><div class="job-kind">${j.kind==='import'?'arXiv → 文献库':j.kind==='chat'?'论文问答':j.kind==='global'?'研究台':'AI 搜索'}<span>${new Date(j.created*1000).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})}</span></div><h3>${esc(j.query)}</h3><p class="${j.status==='failed'?'error':''}">${esc(j.error||j.result?.message||j.stage)}</p>${j.progress&&j.status==='running'?`<p class="job-progress">${esc(j.progress)}</p>`:''}${j.kind==='import'&&j.status==='completed'?`<button class="secondary" data-open-imported="${j.result?.paper_id}">打开论文 ↗</button>`:''}${j.kind==='import'&&j.result?.session_id?`<button class="secondary" data-import-session="${j.result.session_id}">Codex 会话 ↗</button>`:''}${j.kind==='search'&&j.status==='completed'?`<button class="secondary" data-open-search="${j.id}">查看结果 ↗</button>`:''}${j.kind==='chat'&&j.paper_id?`<button class="secondary" data-open-chat="${j.paper_id}">打开对话 ↗</button>`:''}${['queued','running'].includes(j.status)?`<button class="text-button" data-cancel-job="${j.id}">取消</button>`:''}${['failed','cancelled','interrupted'].includes(j.status)?`<button class="secondary" data-retry-job="${j.id}">重试 ↗</button>`:''}<button class="text-button job-log" data-job-log="${j.id}">进度</button><div class="job-events" id="events-${j.id}">${expandedJobs.get(j.id)||''}</div></article>`).join(''):'<div class="empty">暂无任务</div>';
+  $('#job-list').innerHTML=latest.length?latest.map(j=>`<article class="job"><div class="job-kind">${j.kind==='domain'?'领域回扫':j.kind==='import'?'arXiv → 文献库':j.kind==='chat'?'论文问答':j.kind==='global'?'研究台':'AI 搜索'}<span>${new Date(j.created*1000).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})}</span></div><h3>${esc(j.query)}</h3><p class="${j.status==='failed'?'error':''}">${esc(j.error||j.result?.message||j.stage)}</p>${j.progress&&j.status==='running'?`<p class="job-progress">${esc(j.progress)}</p>`:''}${j.kind==='import'&&j.status==='completed'?`<button class="secondary" data-open-imported="${j.result?.paper_id}">打开论文 ↗</button>`:''}${j.kind==='domain'&&j.status==='completed'?`<button class="secondary" data-scan-results="${j.id}">匹配结果 ↗</button>`:''}${['import','domain'].includes(j.kind)&&j.result?.session_id?`<button class="secondary" data-import-session="${j.result.session_id}" data-session-kind="${j.kind}">Codex 会话 ↗</button>`:''}${j.kind==='search'&&j.status==='completed'?`<button class="secondary" data-open-search="${j.id}">查看结果 ↗</button>`:''}${j.kind==='chat'&&j.paper_id?`<button class="secondary" data-open-chat="${j.paper_id}">打开对话 ↗</button>`:''}${['queued','running'].includes(j.status)?`<button class="text-button" data-cancel-job="${j.id}">取消</button>`:''}${['failed','cancelled','interrupted'].includes(j.status)?`<button class="secondary" data-retry-job="${j.id}">重试 ↗</button>`:''}<button class="text-button job-log" data-job-log="${j.id}">进度</button><div class="job-events" id="events-${j.id}">${expandedJobs.get(j.id)||''}</div></article>`).join(''):'<div class="empty">暂无任务</div>';
 }
 async function pollJobs(){
   if(polling)return;polling=true;
@@ -121,7 +124,7 @@ async function pollJobs(){
     for(const j of jobs){
       if(!['completed','failed','cancelled','interrupted'].includes(j.status)||doneJobs.has(j.id))continue;
       doneJobs.add(j.id);
-      if(j.kind==='import'&&j.status==='completed')imported.push(j);
+      if(['import','domain'].includes(j.kind)&&j.status==='completed')imported.push(j);
       if(j.id===activeSearch){
         if(j.status==='completed'){
           searchResult=j.result;$('#search-status').innerHTML=`<span>${esc(j.result.interpretation)}</span><button id="clear-search" class="text-button">清除 ×</button>`;render();
@@ -154,7 +157,8 @@ async function search(){
 document.addEventListener('click',async e=>{
   const b=e.target.closest('button');if(!b)return;
   try{
-    if(b.dataset.importSession){await openImportSession(b.dataset.importSession);return;}
+    if(b.dataset.scanResults){await domainResults(b.dataset.scanResults,{papers:()=>papers,reload:loadLibrary,openPaper:async c=>{$('.app').inert=true;await reader.open(byId(c.paper_id));await reader.jump(c.language,c.page);}});return;}
+    if(b.dataset.importSession){await openImportSession(b.dataset.importSession,b.dataset.sessionKind||'import');return;}
     if(b.dataset.assignDomain){await workspace.domains(byId(b.dataset.assignDomain));return;}
     if(b.dataset.scope||b.dataset.domain||b.dataset.collection||b.dataset.topic)workspace.close();
     if(b.dataset.read){$('.app').inert=true;$('#drawer').inert=true;await reader.open(byId(b.dataset.read));return;}

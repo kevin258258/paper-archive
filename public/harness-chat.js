@@ -48,7 +48,7 @@ export class HarnessChat {
           <button type="submit" aria-label="发送给 Codex">↑</button></div>
       </form><div class="harness-footer"><span data-status>本机 harness · 读取资料</span><span data-usage></span></div>
       <p class="harness-error error" role="alert"></p>`;
-    if(options.kind==='import'){for(const action of ['new','legacy'])$('[data-action='+action+']',root).hidden=true;}
+    if(['import','domain'].includes(options.kind)){for(const action of ['new','legacy'])$('[data-action='+action+']',root).hidden=true;}
     $('form',root).onsubmit=e=>{e.preventDefault();this.send();};
     $('textarea',root).onkeydown=e=>{
       if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();if(!busy(this.session))$('form',root).requestSubmit();}
@@ -71,7 +71,7 @@ export class HarnessChat {
   close(){this.closed=true;this.epoch++;clearTimeout(this.timer);}
   error(error){$('.harness-error',this.root).textContent=error?.message||error||'';}
   renderSessions(){
-    $('[data-sessions]',this.root).innerHTML=(this.options.kind==='import'?'':'<option value="">新对话</option>')+this.sessions.map(s=>`<option value="${s.id}">${esc(s.title)}</option>`).join('');
+    $('[data-sessions]',this.root).innerHTML=(['import','domain'].includes(this.options.kind)?'':'<option value="">新对话</option>')+this.sessions.map(s=>`<option value="${s.id}">${esc(s.title)}</option>`).join('');
     $('[data-sessions]',this.root).value=this.uid||'';
   }
   async switchSession(uid){
@@ -105,6 +105,7 @@ export class HarnessChat {
   }
   pageChanged(){
     const context=this.options.context?.();
+    if(this.options.kind==='domain'){$('.harness-attachment',this.root).textContent='⌑ 全库回扫 · 保留主领域与人工排除';return;}
     if(this.options.kind==='import'){$('.harness-attachment',this.root).textContent='⌑ arXiv · 全文翻译、编译与视觉核验';return;}
     $('.harness-attachment',this.root).textContent=context?`⌑ 完整 PDF  ·  当前 ${context.language==='chinese'?'中':'EN'} ${context.page} 页`:'⌑ 范围内的完整 PDF  ·  正文与图表';
   }

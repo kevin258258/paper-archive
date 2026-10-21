@@ -65,7 +65,7 @@ def snapshot(uid, revision=None):
 
 
 def listing(kind, paper_id=""):
-    if kind not in ("paper", "library", "import"):
+    if kind not in ("paper", "library", "import", "domain"):
         raise ValueError("无效的会话类型")
     with LOCK, lib.db() as c:
         ids = [r["id"] for r in c.execute("SELECT id FROM harness_sessions")]
@@ -185,7 +185,7 @@ def start(uid, data):
     if not isinstance(question, str) or not 1 <= len(question.strip()) <= 100000:
         raise ValueError("请输入问题（最多 100000 字）")
     initial = snapshot(uid)
-    if initial['kind'] == 'import':
+    if initial['kind'] in ('import', 'domain'):
         config = settings.read()
         data = {**data, 'model': data.get('model') or config['import_model'],
                 'effort': data.get('effort') or config['import_effort']}
@@ -211,7 +211,7 @@ def start(uid, data):
                 "context": {"page": page, "language": language, "selection": selection},
                 "items": [], "status": "starting", "model": model, "effort": effort}
         s["turns"].append(turn)
-        if len(s["turns"]) == 1:
+        if len(s["turns"]) == 1 and s['kind'] != 'domain':
             s["title"] = ('翻译入库 · ' + s['arxiv']) if s['kind'] == 'import' else question.strip()[:70]
         _save(s)
     threading.Thread(target=_start, args=(uid,), daemon=True).start()
@@ -226,14 +226,17 @@ def _start(uid):
         common = {"cwd": str(lib.ROOT), "model": s["model"], "sandbox": "read-only",
                   "approvalPolicy": "on-request", "approvalsReviewer": "user"}
         importing = s['kind'] == 'import'
+        scanning = s['kind'] == 'domain'
+        if scanning:
+            import domain_scan
         if importing:
             import agent_import
             import agent_import_tools
             common['sandbox'] = 'workspace-write'
         if not s["thread_id"]:
             result = rpc.call("thread/start", {**common, "ephemeral": False,
-                              "developerInstructions": agent_import.INSTRUCTIONS if importing else paper_tools.INSTRUCTIONS,
-                              "dynamicTools": agent_import_tools.TOOLS if importing else paper_tools.TOOLS})
+                              "developerInstructions": agent_import.INSTRUCTIONS if importing else domain_scan.INSTRUCTIONS if scanning else paper_tools.INSTRUCTIONS,
+                              "dynamicTools": agent_import_tools.TOOLS if importing else domain_scan.TOOLS if scanning else paper_tools.TOOLS})
             with LOCK:
                 _load(uid)["thread_id"] = result["thread"]["id"]
                 _save(_load(uid))
@@ -303,7 +306,7 @@ def safe_item(item):
     result = {k: item[k] for k in keys if k in item}
     if "aggregatedOutput" in result and result["aggregatedOutput"]:
         result["aggregatedOutput"] = result["aggregatedOutput"][-30000:]
-    if item.get('tool') in ('archive_compile_translation', 'archive_check_translation', 'archive_finish_import'):
+    if item.get('tool') in ('archive_compile_translation', 'archive_check_translation', 'archive_finish_import', 'archive_domain_record', 'archive_domain_finish'):
         result['outputText'] = '\n'.join(c.get('text', '') for c in (item.get('contentItems') or [])
                                        if c.get('type') == 'inputText')[-20000:]
     return result
@@ -381,6 +384,9 @@ def server_request(rpc, message):
             if s['kind'] == 'import':
                 import agent_import_tools
                 result = agent_import_tools.execute(s, params['tool'], params.get('arguments', {}))
+            elif s['kind'] == 'domain':
+                import domain_scan
+                result = domain_scan.execute(s, params['tool'], params.get('arguments', {}))
             else:
                 result = paper_tools.execute(s, params["tool"], params.get("arguments", {}))
         except Exception as exc:

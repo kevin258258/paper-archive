@@ -15,6 +15,7 @@ The Electron main process owns the desktop window, directory chooser, encrypted 
 - `public/harness-chat.js`: shared conversation UI, model/effort selectors, streamed Markdown, activity, stop, history and approval controls.
 - `agent_import.py`: durable import-job bridge to the same native Codex session, independent import model/effort and explicit skill attachment. Retries resume the native thread.
 - `agent_import_tools.py`: deterministic downloads, immutable source checks, compiler diagnostics, page/image tools with coverage records, and final archive validation. No nested AI calls.
+- `domain_scan.py`: serialized native Codex scans of a captured library/domain snapshot, durable per-pair decisions, exact PDF quote verification and atomic membership updates. Primary assignments and manual exclusions are preserved. Retries reuse prior decisions and the native session when the snapshot is unchanged.
 - `importer.py`: API fallback, constrained downloads and safe extraction, resumable translation with structural invariants, restricted XeLaTeX compilation, full-text note generation and registry-based classification.
 - `skills/arxiv-translate/`: portable workflow instructions for external automation and manual repair.
 
@@ -40,6 +41,8 @@ The 0.2 verification passed 37 automated tests and exercised a real Codex app-se
 The 0.3 suite passes 45 tests, including explicit skill attachment, independent import defaults, same-thread import retries, immutable sources, mathematical damage rejection, complete PDF coverage and current translated page images. A streaming regression case covers native command items whose initial output is null. Compilation and finalization are separate checks; an interrupted agent cannot mark an unfinished package complete.
 
 The 0.3.1 suite passes 51 tests. Batch cases cover mixed link formats and version deduplication, complete rejection before submitting invalid input, idempotent repeated submissions, visibility of all 50 pending tasks, immediate handling of already archived papers, and a blocked import followed by failure while search and the next import still complete. A dedicated single-worker executor keeps translation serialized without occupying the search/conversation pool. `POST /api/imports` accepts `{query: "links or IDs"}` and returns `{jobs, count}`; each paper retains its ordinary durable job and native conversation.
+
+The 0.4 suite passes 61 tests. Domain-scan cases cover complete pair coverage, fabricated or wrong-page quote rejection, overlapping memberships, unchanged primary/manual assignments, immutable paper files, uncertain suggestions, durable manual exclusions, changed domain/source rejection, same-session retry, automatic scheduling and exclusion of human notes from scan tools. A live scan classified all 184 pairs across a 92-paper snapshot and two domains with verified positive page evidence. These checks establish scope and evidence provenance; semantic relevance and confidence remain model judgments.
 
 ## Known boundaries
 
