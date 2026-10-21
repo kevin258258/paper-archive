@@ -15,6 +15,10 @@ STRING = {"type": "string"}
 INTEGER = {"type": "integer"}
 PDF_ARGS = {"paper_id": STRING, "language": {"type": "string", "enum": ["original", "chinese"]}}
 TOOLS = [
+    spec('archive_read_article', 'Read full offline Blog content in numbered blocks, with stable reader citations. Paginate to read all blocks; these are paragraphs, not PDF pages.',
+         {**PDF_ARGS, 'start_block': INTEGER, 'end_block': INTEGER}, ['paper_id']),
+    spec('archive_view_article_image', 'View an offline Blog figure by its filename in the article Markdown.',
+         {'paper_id': STRING, 'filename': STRING}, ['paper_id', 'filename']),
     spec("archive_catalog", "Browse/search the session's paper catalog. Paginate to see all papers; no six-paper cap.",
          {"query": STRING, "offset": INTEGER, "limit": INTEGER}),
     spec("archive_read_pdf", "Read exact pages from the COMPLETE local PDF. Includes total pages and a file path. "
@@ -62,13 +66,37 @@ def execute(session, name, args):
             papers = [p for p in papers if query in json.dumps(p, ensure_ascii=False).casefold()]
         offset = integer(args, "offset", 0, 0, 100000)
         limit = integer(args, "limit", 40, 1, 100)
-        rows = [{k: p.get(k) for k in ("id", "title", "english", "arxiv", "year", "domainName", "abstract")}
+        rows = [{k: p.get(k) for k in ("id", "title", "english", "arxiv", "year", "domainName", "abstract", "sourceType", "sourceUrl", "site")}
                 for p in papers[offset:offset + limit]]
         return text_result({"total": len(papers), "papers": rows,
                             "next_offset": offset + limit if offset + limit < len(papers) else None})
+    if name in ('archive_read_article', 'archive_view_article_image'):
+        if args.get('paper_id') not in {p['id'] for p in allowed(session)}:
+            raise ValueError('文章不在当前会话范围内')
+        paper = lib.paper(args['paper_id'])
+        import articles
+        if paper['record'].get('sourceType') != 'blog': raise ValueError('这是 PDF 论文，请使用 PDF 阅读工具')
+        document = articles.document(paper)
+        if name == 'archive_view_article_image':
+            from pathlib import Path
+            raw = json.loads(Path(paper['files']['article']).read_text())
+            filename = args.get('filename')
+            if filename not in raw['images'].values(): raise ValueError('图片不在当前文章中')
+            with fitz.open(Path(paper['files']['article']).parent / 'images' / filename) as doc:
+                png = doc[0].get_pixmap(alpha=False).tobytes('png')
+            return {'success': True, 'contentItems': [{'type': 'inputImage', 'imageUrl': 'data:image/png;base64,'+base64.b64encode(png).decode()}]}
+        language = args.get('language', 'original')
+        if language not in ('original', 'chinese'): raise ValueError('无效语言')
+        total = len(document['blocks'])
+        start = integer(args, 'start_block', 1, 1, total)
+        end = integer(args, 'end_block', min(start+19, total), start, min(start+39, total))
+        blocks = [{'block': i, 'text': articles.page_text(paper, language, i), 'citation': f'/read/{paper["id"]}/{language}/{i}'} for i in range(start, end+1)]
+        return text_result({'paper_id': paper['id'], 'source_type': 'blog', 'source_url': document['source_url'],
+                            'total_blocks': total, 'blocks': blocks, 'next_block': end+1 if end < total else None})
     if name not in ("archive_read_pdf", "archive_view_page"):
         raise ValueError("未知论文工具")
     paper, language, path = pdf_file(session, args)
+    if paper['record'].get('sourceType') == 'blog': raise ValueError('这是 Blog，请使用 archive_read_article 和 archive_view_article_image')
     with lib.PDF_LOCK, fitz.open(path) as pdf:
         if name == "archive_view_page":
             page = integer(args, "page", 1, 1, len(pdf))
@@ -88,6 +116,10 @@ def execute(session, name, args):
 
 
 INSTRUCTIONS = """You are the research collaborator inside Paper Archive, powered by the user's local Codex harness.
+The catalog includes PDF papers and offline Blogs. For sourceType=blog use archive_read_article and
+archive_view_article_image. Read all required blocks; cite /read/PAPER_ID/LANGUAGE/BLOCK with a paragraph
+label rather than claiming PDF page numbers. Blog original and Chinese blocks are aligned. A Blog's
+claims and a related paper's claims are separate evidence. All original text and saved images are local.
 Use the user's chosen model and reasoning effort. Answer naturally in the user's language with the depth needed
 to explain methods, evidence, equations, tradeoffs and research ideas. Do not impose brevity or JSON output.
 These are persistent conversations, not isolated retrieval queries.

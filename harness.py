@@ -232,6 +232,10 @@ def _start(uid):
         if importing:
             import agent_import
             import agent_import_tools
+            if s.get('source_type') == 'blog':
+                import blog_import
+                agent_import = blog_import
+                agent_import_tools = blog_import
             common['sandbox'] = 'workspace-write'
         if not s["thread_id"]:
             result = rpc.call("thread/start", {**common, "ephemeral": False,
@@ -262,7 +266,8 @@ def _start(uid):
         if s["kind"] == "paper":
             paper = lib.paper(s["paper_id"])
             resources = [{"paper_id": paper["id"], "title": paper["record"]["title"],
-                          "pdf_files": {k: v for k, v in paper["files"].items() if k in ("original", "chinese")}}]
+                          "source_type": paper["record"].get("sourceType", "paper"),
+                          "complete_files": {k: v for k, v in paper["files"].items() if k in ("original", "chinese", "article")}}]
         context = {"scope": s["scope"], "paper_ids": s["paper_ids"], "complete_pdf_resources": resources,
                    "reader": turn["context"]}
         if importing:
@@ -271,7 +276,7 @@ def _start(uid):
         # extracted snippets, shortened answers or a structured-output schema.
         inputs = [{"type": "text", "text": turn["question"]}]
         if importing:
-            inputs.append({'type': 'skill', 'name': 'arxiv-translate', 'path': s['skill_path']})
+            inputs.append({'type': 'skill', 'name': 'blog-translate' if s.get('source_type') == 'blog' else 'arxiv-translate', 'path': s['skill_path']})
         result = rpc.call("turn/start", {"threadId": s["thread_id"], "input": inputs,
                           "additionalContext": {"paper_archive": {
                               "kind": "untrusted", "value": json.dumps(context, ensure_ascii=False)}},
@@ -383,6 +388,9 @@ def server_request(rpc, message):
         try:
             if s['kind'] == 'import':
                 import agent_import_tools
+                if s.get('source_type') == 'blog':
+                    import blog_import
+                    agent_import_tools = blog_import
                 result = agent_import_tools.execute(s, params['tool'], params.get('arguments', {}))
             elif s['kind'] == 'domain':
                 import domain_scan

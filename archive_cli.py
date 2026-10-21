@@ -25,7 +25,9 @@ def main(argv=None):
         return 0
     result = lib.refresh()
     if args.command == 'import':
-        job = jobs.create('import', args.arxiv, submit=False)
+        sources = lib.parse_sources(args.arxiv)
+        if len(sources) != 1: raise ValueError('CLI import 每次处理一个链接')
+        job = jobs.create(*sources[0], submit=False)
         if job['status'] in ('running',):
             print('该论文已有导入任务，请在应用中查看进度')
             return 1
@@ -37,7 +39,7 @@ def main(argv=None):
         failures = []
         for paper in lib.papers():
             try:
-                jobs.verify_import(paper['arxiv'])
+                (__import__('articles').document(lib.paper(paper['id'])) if paper.get('sourceType') == 'blog' else jobs.verify_import(paper['arxiv']))
             except (RuntimeError, ValueError) as exc:
                 failures.append({'arxiv': paper['arxiv'], 'error': str(exc)})
         result['incomplete'] = failures

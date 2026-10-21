@@ -13,7 +13,7 @@ export class PaperChat {
     if(!this.native)return this.legacy.open(paper);
     this.client?.close();
     this.client=new HarnessChat($('#paper-harness',this.reader.host),{
-      kind:'paper',paper_id:paper.id,title:paper.title,
+      kind:'paper',paper_id:paper.id,title:paper.title,sourceType:paper.sourceType,
       context:()=>({page:this.reader.viewer?.currentPageNumber||1,language:this.reader.language}),
       openPaper:async c=>{if(c.paper_id===paper.id)await this.reader.jump(c.language,c.page);else throw Error('引用不属于当前论文');},
     });
@@ -55,7 +55,7 @@ class LegacyPaperChat {
   stop(){clearTimeout(this.timer);this.epoch++;this.paper=null;}
   pageChanged(){
     const el=$('#chat-page-context',this.reader.host);
-    if(el)el.textContent=`${this.reader.language==='chinese'?'中':'EN'} · ${this.reader.viewer?.currentPageNumber||1} 页`;
+    if(el)el.textContent=`${this.reader.language==='chinese'?'中':'EN'} · ${this.reader.viewer?.currentPageNumber||1} ${this.paper?.sourceType==='blog'?'段':'页'}`;
   }
   setSelection(value){
     this.selection=value?structuredClone(value):null;
@@ -78,7 +78,7 @@ class LegacyPaperChat {
     const nearBottom=host.scrollHeight-host.scrollTop-host.clientHeight<90;
     host.innerHTML=this.turns.length?this.turns.map(t=>`<article class="chat-turn">
       <div class="chat-question">${esc(t.query)}</div>
-      ${t.context.selection?`<details class="chat-context"><summary>引用选文 · ${t.context.language==='chinese'?'中':'EN'} ${t.context.page}</summary><p>${esc(t.context.selection)}</p></details>`:''}
+      ${t.context.selection?`<details class="chat-context"><summary>引用选文 · ${t.context.language==='chinese'?'中':'EN'} ${t.context.page} ${this.paper?.sourceType==='blog'?'段':'页'}</summary><p>${esc(t.context.selection)}</p></details>`:''}
       ${t.status==='completed'?`<div class="chat-answer markdown">${markdown(t.result?.answer)}</div>
       ${t.result?.coverage&&!t.result.coverage.complete?'<p class="chat-notice">论文较长，本次依据部分页面回答。</p>':''}
       ${t.result?.unverified?'<p class="chat-notice">部分依据未通过逐字校验，请核对原文。</p>':''}
@@ -98,7 +98,7 @@ class LegacyPaperChat {
     try{
       const selection=this.selection;
       await api(`/api/papers/${paper.id}/chat`,{question,language:selection?.language||this.reader.language,
-        page:selection?.page||this.reader.viewer.currentPageNumber,selection:selection?.text||''});
+        page:selection?.page||this.reader.viewer?.currentPageNumber||1,selection:selection?.text||''});
       this.drafts.delete(paper.id);
       if(epoch!==this.epoch)return;
       input.value='';this.setSelection(null);this.pendingScroll=true;

@@ -99,6 +99,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json({"path": file})
             if path == "/api/library":
                 return self.json({"papers": lib.papers()})
+            m = re.fullmatch(r'/api/articles/([a-f0-9]{20})', path)
+            if m:
+                import articles
+                return self.json(articles.document(lib.paper(m[1])))
+            m = re.fullmatch(r'/article-asset/([a-f0-9]{20})/([a-f0-9]{24}\.(?:png|jpg|gif|webp|avif|svg))', path)
+            if m:
+                paper = lib.paper(m[1])
+                article = Path(paper['files']['article'])
+                value = json.loads(article.read_text())
+                if m[2] not in value['images'].values(): return self.send_error(404)
+                return self.file(article.parent / 'images' / m[2])
             if path == "/api/settings":
                 return self.json(settings.public())
             if path == "/api/harness/sessions":
@@ -137,7 +148,7 @@ class Handler(BaseHTTPRequestHandler):
                 f = lib.paper(parts[1])["files"].get(parts[2])
                 if not f:
                     return self.send_error(404)
-                return self.file(Path(f), "application/pdf" if parts[2] != "card" else "text/plain; charset=utf-8")
+                return self.file(Path(f), "application/pdf" if Path(f).suffix == '.pdf' else "text/plain; charset=utf-8")
             if path.startswith("/assets/"):
                 if not re.fullmatch(r"/assets/[a-f0-9]{20}\.png", path):
                     return self.send_error(404)

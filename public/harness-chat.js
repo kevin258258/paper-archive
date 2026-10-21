@@ -106,8 +106,8 @@ export class HarnessChat {
   pageChanged(){
     const context=this.options.context?.();
     if(this.options.kind==='domain'){$('.harness-attachment',this.root).textContent='⌑ 全库回扫 · 保留主领域与人工排除';return;}
-    if(this.options.kind==='import'){$('.harness-attachment',this.root).textContent='⌑ arXiv · 全文翻译、编译与视觉核验';return;}
-    $('.harness-attachment',this.root).textContent=context?`⌑ 完整 PDF  ·  当前 ${context.language==='chinese'?'中':'EN'} ${context.page} 页`:'⌑ 范围内的完整 PDF  ·  正文与图表';
+    if(this.options.kind==='import'){$('.harness-attachment',this.root).textContent=this.options.sourceType==='blog'?'⌑ Blog · 全文翻译与离线图文':'⌑ arXiv · 全文翻译、编译与视觉核验';return;}
+    $('.harness-attachment',this.root).textContent=context?`⌑ ${this.options.sourceType==='blog'?'完整 Blog':'完整 PDF'} · 当前 ${context.language==='chinese'?'中':'EN'} ${context.page} ${this.options.sourceType==='blog'?'段':'页'}`:'⌑ 范围内的完整论文与 Blog · 正文与图表';
   }
   setSelection(value){
     this.selection=value?structuredClone(value):null;

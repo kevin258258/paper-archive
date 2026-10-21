@@ -32,6 +32,8 @@ TOOLS = paper_tools.TOOLS + [
     paper_tools.spec('archive_domain_finish', 'Commit domain memberships only after every paper/domain pair has a recorded decision. Preserve primary/manual domains, files and user exclusions.', {}),
 ]
 INSTRUCTIONS = '''You are scanning the user's EXISTING paper library for newly defined domains.
+The library also contains Blogs (sourceType=blog). Read them with archive_read_article; for these
+sources the decision's page field is a numbered article block and the quote must occur in that block.
 Use archive_domain_progress for the complete snapshot and current domain descriptions. Review EVERY
 paper/domain pair, including negative and uncertain results. Catalog metadata and existing Agent notes
 are a starting point; use complete PDF page tools for unclear cases and all positive evidence.
@@ -143,9 +145,14 @@ def record(uid, decisions):
                 file = paper['files'].get(language) if language in ('original', 'chinese') else None
                 if not file or type(page) is not int or not isinstance(quote, str) or len(norm(quote)) < 12:
                     raise ValueError('匹配判断需要真实 PDF 页码和原文引用')
-                with lib.PDF_LOCK, fitz.open(file) as pdf:
-                    if not 1 <= page <= len(pdf) or norm(quote) not in norm(pdf[page-1].get_text()):
-                        raise ValueError('引用未在指定 PDF 页面找到')
+                if paper['record'].get('sourceType') == 'blog':
+                    import articles
+                    if norm(quote) not in norm(articles.page_text(paper, language, page)):
+                        raise ValueError('引用未在指定文章段落找到')
+                else:
+                    with lib.PDF_LOCK, fitz.open(file) as pdf:
+                        if not 1 <= page <= len(pdf) or norm(quote) not in norm(pdf[page-1].get_text()):
+                            raise ValueError('引用未在指定 PDF 页面找到')
             additions[p + ':' + d] = {k: data.get(k) for k in DECISION['properties']}
         value['decisions'].update(additions)
         write(uid, value)

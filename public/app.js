@@ -9,7 +9,7 @@ import {PaperMenu} from './paper-menu.js';
 let papers=[], reading={}, waiting=[], domains=[], current=[], activePaper=null, jobs=[], drawerMode='', activeSearch=null, searchResult=null;
 const doneJobs=new Set(), expandedJobs=new Map();
 let jobSnapshot="", polling=false;
-const state={view:localStorage.getItem('paper-view')||'A',scope:localStorage.getItem('paper-scope')==='waiting'?'waiting':'all',collection:'',domain:'',topic:'',year:'',cn:false,notes:false,query:'',ai:true,sort:'recent'};
+const state={view:localStorage.getItem('paper-view')||'A',scope:localStorage.getItem('paper-scope')==='waiting'?'waiting':'all',collection:'',domain:'',topic:'',year:'',sourceType:'',cn:false,notes:false,query:'',ai:true,sort:'recent'};
 const topics=['模型增长','循环与推理','强化学习','多模态','智能体','蒸馏','技术报告','评测'];
 const byId=id=>papers.find(p=>p.id===id);
 const belongs=(p,id)=>(p.domainIds||[p.domain]).includes(id);
@@ -108,12 +108,12 @@ async function loadLibrary(){
 function filtered(){
   const hits=new Map((searchResult?.results||[]).map((r,i)=>[r.id,{...r,index:i}]));
   const terms=state.ai?[]:state.query.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  return papers.filter(p=>(!searchResult||hits.has(p.id))&&(!state.domain||belongs(p,state.domain))&&(!state.topic||p.topics.includes(state.topic))&&(!state.year||String(p.year)===state.year)&&(!state.cn||p.chinese)&&(!state.notes||p.notes.length)&&(!state.collection||collections.active.find(c=>c.id===state.collection)?.papers.includes(p.id))&&(state.scope!=='marked'||collections.has(p.id))&&(state.scope!=='unread'||human(p)==='未读')&&(state.scope!=='waiting'||!!queued(p.id))&&terms.every(t=>p.searchText.includes(t)))
+  return papers.filter(p=>(!searchResult||hits.has(p.id))&&(!state.domain||belongs(p,state.domain))&&(!state.topic||p.topics.includes(state.topic))&&(!state.sourceType||(p.sourceType||'paper')===state.sourceType)&&(!state.year||String(p.year)===state.year)&&(!state.cn||p.chinese)&&(!state.notes||p.notes.length)&&(!state.collection||collections.active.find(c=>c.id===state.collection)?.papers.includes(p.id))&&(state.scope!=='marked'||collections.has(p.id))&&(state.scope!=='unread'||human(p)==='未读')&&(state.scope!=='waiting'||!!queued(p.id))&&terms.every(t=>p.searchText.includes(t)))
     .sort((a,b)=>state.scope==='waiting'?((queued(b.id).priority-queued(a.id).priority)||(queued(a.id).added-queued(b.id).added)):searchResult?hits.get(a.id).index-hits.get(b.id).index:state.sort==='title'?a.title.localeCompare(b.title,'zh'):state.sort==='year'?(b.year||0)-(a.year||0):b.created.localeCompare(a.created)||(b.year||0)-(a.year||0));
 }
 function reason(p){const hit=searchResult?.results.find(r=>r.id===p.id);return hit?`<div class="match-reason">${esc(hit.reason)}${hit.uncertainty?`<small>${esc(hit.uncertainty)}</small>`:''}</div>`:'';}
-function gallery(list){return '<div class="gallery">'+list.map(p=>`<article class="paper-card" data-paper-id="${p.id}"><button class="paper-menu-trigger" data-paper-menu="${p.id}" aria-label="更多操作 ${esc(p.title)}">⋯</button><button class="cover" data-read="${p.id}" aria-label="阅读 ${esc(p.title)}"><span class="paper-number mono">${number(p)}</span><span class="cover-mark">${collections.has(p.id)?'+':''}</span>${p.thumb?`<img src="${p.thumb}" alt="" loading="lazy">`:''}<span class="cover-bottom"></span><span class="read-affordance">阅读 ↗</span></button><div class="card-meta"><span>${p.year||'—'} / ${p.domain}</span><span>${p.pages.original||p.pages.chinese||'—'} P</span></div><button class="card-title" data-detail="${p.id}" title="${esc(p.title)}">${esc(p.title)}</button><div class="card-foot"><span>${human(p)}</span><span class="format">${p.chinese?'<span>中</span>':''}${p.notes.length?'<span>NOTE</span>':''}</span><button data-mark="${p.id}" aria-label="${collections.has(p.id)?'管理收藏':'收藏到'} ${esc(p.title)}">${collections.has(p.id)?'✓':'+'}</button></div>${reason(p)}</article>`).join('')+'</div>';}
-function catalog(list){return '<table class="catalog"><thead><tr><th class="row-no">NO.</th><th>标题</th><th class="row-domain">领域</th><th class="row-year">年份</th><th class="row-star"></th></tr></thead><tbody>'+list.map(p=>`<tr data-paper-id="${p.id}"><td class="row-no">${number(p)}</td><td class="row-title"><button data-read="${p.id}">${esc(p.title)}</button><small>${esc(p.english)}</small>${reason(p)}</td><td class="row-domain">${esc(p.domainName)}</td><td class="row-year">${p.year||'—'}</td><td><button class="paper-menu-trigger" data-paper-menu="${p.id}" aria-label="更多操作 ${esc(p.title)}">⋯</button></td></tr>`).join('')+'</tbody></table>';}
+function gallery(list){return '<div class="gallery">'+list.map(p=>`<article class="paper-card" data-paper-id="${p.id}"><button class="paper-menu-trigger" data-paper-menu="${p.id}" aria-label="更多操作 ${esc(p.title)}">⋯</button><button class="cover" data-read="${p.id}" aria-label="阅读 ${esc(p.title)}"><span class="paper-number mono">${number(p)}</span><span class="cover-mark">${collections.has(p.id)?'+':''}</span>${p.thumb?`<img src="${p.thumb}" alt="" loading="lazy">`:p.sourceType==='blog'?`<span class="blog-cover"><span>BLOG · ${esc(p.site)}</span><strong>${esc(p.english||p.title)}</strong><i>↗</i></span>`:''}<span class="cover-bottom"></span><span class="read-affordance">阅读 ↗</span></button><div class="card-meta"><span>${p.year||'—'} / ${p.domain}</span><span>${p.sourceType==='blog'?'BLOG':(p.pages.original||p.pages.chinese||'—')+' P'}</span></div><button class="card-title" data-detail="${p.id}" title="${esc(p.title)}">${esc(p.title)}</button><div class="card-foot"><span>${human(p)}</span><span class="format">${p.chinese?'<span>中</span>':''}${p.notes.length?'<span>NOTE</span>':''}</span><button data-mark="${p.id}" aria-label="${collections.has(p.id)?'管理收藏':'收藏到'} ${esc(p.title)}">${collections.has(p.id)?'✓':'+'}</button></div>${reason(p)}</article>`).join('')+'</div>';}
+function catalog(list){return '<table class="catalog"><thead><tr><th class="row-no">NO.</th><th>标题</th><th class="row-domain">领域</th><th class="row-year">年份</th><th class="row-star"></th></tr></thead><tbody>'+list.map(p=>`<tr data-paper-id="${p.id}"><td class="row-no">${number(p)}</td><td class="row-title"><button data-read="${p.id}">${esc(p.title)}</button><small>${p.sourceType==='blog'?'<span class="source-label">BLOG</span>':''}${esc(p.english)}</small>${reason(p)}</td><td class="row-domain">${esc(p.domainName)}</td><td class="row-year">${p.year||'—'}</td><td><button class="paper-menu-trigger" data-paper-menu="${p.id}" aria-label="更多操作 ${esc(p.title)}">⋯</button></td></tr>`).join('')+'</tbody></table>';}
 function matrix(list){return '<div class="matrix"><div class="matrix-inspector" id="matrix-inspector"><strong>—</strong><span>领域 × 文献</span></div>'+domains.map(d=>{const group=list.filter(p=>belongs(p,d.id));return group.length?`<section class="matrix-group"><button class="matrix-group-label" data-domain="${d.id}">${esc(d.name)}<span>${d.id} / ${group.length}</span></button><div class="matrix-cells">${group.map(p=>`<button class="matrix-cell ${collections.has(p.id)?'marked':''}" data-read="${p.id}" data-hover="${p.id}" data-paper-id="${p.id}" aria-label="阅读 ${esc(p.title)}" title="${esc(p.title)}">${p.thumb?`<img src="${p.thumb}" alt="" loading="lazy">`:''}<span class="matrix-id">${number(p)}</span></button>`).join('')}</div></section>`:'';}).join('')+'</div>';}
 function renderCounts(){
   $('#total').textContent=String(papers.length).padStart(3,'0');
@@ -127,7 +127,7 @@ function render(){
   const heading=state.topic||(state.domain?domains.find(d=>d.id===state.domain)?.name:state.collection?collections.active.find(c=>c.id===state.collection)?.name:state.scope==='waiting'?'待读清单':state.scope==='marked'?'已收藏':state.scope==='unread'?'未读':searchResult?'搜索结果':'全部藏品');
   $('#heading').innerHTML=`${esc(heading)}<span>${current.length}</span>`;
   $('#domain-code').textContent=state.scope==='waiting'?'/ WAITING':state.domain?'/ '+state.domain:'/ ALL';
-  $('#mobile-domain').value=state.domain;$('#mobile-topic').value=state.topic;$('#year').value=state.year;
+  $('#source-type').value=state.sourceType;$('#mobile-domain').value=state.domain;$('#mobile-topic').value=state.topic;$('#year').value=state.year;
   $('#filter-cn').setAttribute('aria-pressed',state.cn);$('#filter-notes').setAttribute('aria-pressed',state.notes);
   document.querySelectorAll('[data-view]').forEach(b=>{b.classList.toggle('active',b.dataset.view===state.view);b.setAttribute('aria-pressed',b.dataset.view===state.view);});
   document.querySelectorAll('[data-domain]').forEach(b=>b.classList.toggle('active',b.dataset.domain===state.domain));
@@ -139,7 +139,7 @@ function render(){
   $('#footer-count').textContent=`${String(current.length).padStart(3,'0')} / ${String(papers.length).padStart(3,'0')}`;
 }
 function reset(){
-  Object.assign(state,{scope:'all',collection:'',domain:'',topic:'',year:'',cn:false,notes:false,query:''});
+  Object.assign(state,{scope:'all',collection:'',domain:'',topic:'',year:'',sourceType:'',cn:false,notes:false,query:''});
   $('#search').value='';activeSearch=null;searchResult=null;$('#search-status').hidden=true;render();
 }
 function openDrawer(mode){drawerMode=mode;$('#drawer').inert=false;$('#backdrop').hidden=false;$('#drawer').hidden=false;$('.app').inert=true;document.body.style.overflow='hidden';}
@@ -147,7 +147,7 @@ function closeDrawer(){drawerMode='';activePaper=null;$('#backdrop').hidden=true
 function detail(p){
   activePaper=p;openDrawer('paper');
   const hit=searchResult?.results.find(r=>r.id===p.id);
-  $('#drawer').innerHTML=`<div class="drawer-top"><span>${esc(p.arxiv||'LOCAL')}</span><button class="close" data-close aria-label="关闭详情">×</button></div><div class="drawer-cover">${p.thumb?`<img src="${p.thumb}" alt="">`:''}</div><h2>${esc(p.title)}</h2><p class="english-title">${esc(p.english)}</p><div class="detail-actions"><button class="paper-menu-trigger" data-paper-menu="${p.id}" aria-label="更多操作 ${esc(p.title)}">⋯</button><button class="primary" data-read="${p.id}">阅读 ↗</button><button class="secondary" data-mark="${p.id}">${collections.has(p.id)?'管理收藏集':'+ 收藏到'}</button></div><dl class="detail-fields"><dt>领域</dt><dd><button class="text-button" data-assign-domain="${p.id}">${esc(p.domainName)} ↗</button></dd>${p.relatedDomains?.filter(d=>d.id!==p.domain).length?`<dt>同时归入</dt><dd>${p.relatedDomains.filter(d=>d.id!==p.domain).map(d=>`<span title="${esc(d.reason)}">${esc(d.name)}</span>`).join(' · ')}</dd>`:''}<dt>作者</dt><dd>${esc(p.authors.slice(0,7).join(' · '))}</dd><dt>年份</dt><dd>${p.year||'—'}</dd><dt>阅读</dt><dd>${human(p)}</dd></dl>${hit?`<section class="summary"><div class="summary-title">匹配依据</div>${esc(hit.reason)}<blockquote>${esc(hit.evidence)}</blockquote>${hit.uncertainty?`<p>${esc(hit.uncertainty)}</p>`:''}</section>`:''}<section class="summary">${esc(p.summary||p.abstract)}</section><div class="notes-list">${p.notes.map(n=>`<button data-note="${n.key}">${n.label}<span>↗</span></button>`).join('')}</div>`;
+  $('#drawer').innerHTML=`<div class="drawer-top"><span>${esc(p.sourceType==='blog'?'BLOG · '+p.site:p.arxiv||'LOCAL')}</span><button class="close" data-close aria-label="关闭详情">×</button></div><div class="drawer-cover">${p.thumb?`<img src="${p.thumb}" alt="">`:''}</div><h2>${esc(p.title)}</h2><p class="english-title">${esc(p.english)}</p><div class="detail-actions"><button class="paper-menu-trigger" data-paper-menu="${p.id}" aria-label="更多操作 ${esc(p.title)}">⋯</button><button class="primary" data-read="${p.id}">阅读 ↗</button><button class="secondary" data-mark="${p.id}">${collections.has(p.id)?'管理收藏集':'+ 收藏到'}</button></div><dl class="detail-fields"><dt>领域</dt><dd><button class="text-button" data-assign-domain="${p.id}">${esc(p.domainName)} ↗</button></dd>${p.relatedDomains?.filter(d=>d.id!==p.domain).length?`<dt>同时归入</dt><dd>${p.relatedDomains.filter(d=>d.id!==p.domain).map(d=>`<span title="${esc(d.reason)}">${esc(d.name)}</span>`).join(' · ')}</dd>`:''}${p.sourceType==='blog'?`<dt>原文</dt><dd><a href="${esc(p.sourceUrl)}" target="_blank" rel="noopener">${esc(p.site)} ↗</a></dd>${p.relatedArxiv?.length?`<dt>关联论文</dt><dd>${p.relatedArxiv.map(id=>{const related=papers.find(v=>v.arxiv&&v.arxiv.replace(/v\d+$/,'')===id.replace(/v\d+$/,''));return related?`<button class="text-button" data-read="${related.id}">${esc(related.title)} ↗</button>`:`<a href="https://arxiv.org/abs/${encodeURI(id)}" target="_blank" rel="noopener">${esc(id)} ↗</a>`;}).join(' · ')}</dd>`:''}`:''}<dt>作者</dt><dd>${esc(p.authors.slice(0,7).join(' · '))}</dd><dt>年份</dt><dd>${p.year||'—'}</dd><dt>阅读</dt><dd>${human(p)}</dd></dl>${hit?`<section class="summary"><div class="summary-title">匹配依据</div>${esc(hit.reason)}<blockquote>${esc(hit.evidence)}</blockquote>${hit.uncertainty?`<p>${esc(hit.uncertainty)}</p>`:''}</section>`:''}<section class="summary">${esc(p.summary||p.abstract)}</section><div class="notes-list">${p.notes.map(n=>`<button data-note="${n.key}">${n.label}<span>↗</span></button>`).join('')}</div>`;
   $('#drawer').scrollTop=0;$('#drawer .close').focus();
 }
 function showJobs(){
@@ -157,9 +157,9 @@ function showJobs(){
 }
 async function openImportSession(id,kind='import'){
   const dialog=document.createElement('dialog');dialog.className='import-session-dialog';dialog.setAttribute('aria-label',kind==='domain'?'领域回扫 Codex 会话':'翻译入库 Codex 会话');
-  dialog.innerHTML='<div class="dialog-top"><span>'+ (kind==='domain'?'领域回扫':'翻译入库') +' · Codex</span><button aria-label="关闭入库会话">×</button></div><section class="import-harness"></section>';
+  dialog.innerHTML='<div class="dialog-top"><span>'+ (kind==='domain'?'领域回扫':kind==='blog'?'Blog 翻译':'翻译入库') +' · Codex</span><button aria-label="关闭入库会话">×</button></div><section class="import-harness"></section>';
   document.body.append(dialog);dialog.showModal();
-  const client=new HarnessChat($('.import-harness',dialog),{kind,
+  const client=new HarnessChat($('.import-harness',dialog),{kind:kind==='blog'?'import':kind,sourceType:kind==='blog'?'blog':'paper',
     openPaper:async c=>{dialog.close();$('.app').inert=true;await reader.open(byId(c.paper_id));await reader.jump(c.language,c.page);}});
   client.uid=id;dialog.onclose=()=>{client.close();dialog.remove();};$('.dialog-top button',dialog).onclick=()=>dialog.close();
   await client.open();
@@ -169,7 +169,7 @@ function renderJobs(){
   if(drawerMode!=='jobs')return;
   const snapshot=JSON.stringify([jobs,[...expandedJobs]]);if(snapshot===jobSnapshot)return;jobSnapshot=snapshot;
   const latest=jobs.filter((j,i)=>jobs.findIndex(p=>p.kind===j.kind&&p.query===j.query&&p.paper_id===j.paper_id)===i);
-  $('#job-list').innerHTML=latest.length?latest.map(j=>`<article class="job"><div class="job-kind">${j.kind==='domain'?'领域回扫':j.kind==='import'?'arXiv → 文献库':j.kind==='chat'?'论文问答':j.kind==='global'?'研究台':'AI 搜索'}<span>${new Date(j.created*1000).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})}</span></div><h3>${esc(j.query)}</h3><p class="${j.status==='failed'?'error':''}">${esc(j.error||j.result?.message||j.stage)}</p>${j.progress&&j.status==='running'?`<p class="job-progress">${esc(j.progress)}</p>`:''}${j.kind==='import'&&j.status==='completed'?`<button class="secondary" data-open-imported="${j.result?.paper_id}">打开论文 ↗</button>`:''}${j.kind==='domain'&&j.status==='completed'?`<button class="secondary" data-scan-results="${j.id}">匹配结果 ↗</button>`:''}${['import','domain'].includes(j.kind)&&j.result?.session_id?`<button class="secondary" data-import-session="${j.result.session_id}" data-session-kind="${j.kind}">Codex 会话 ↗</button>`:''}${j.kind==='search'&&j.status==='completed'?`<button class="secondary" data-open-search="${j.id}">查看结果 ↗</button>`:''}${j.kind==='chat'&&j.paper_id?`<button class="secondary" data-open-chat="${j.paper_id}">打开对话 ↗</button>`:''}${['queued','running'].includes(j.status)?`<button class="text-button" data-cancel-job="${j.id}">取消</button>`:''}${['failed','cancelled','interrupted'].includes(j.status)?`<button class="secondary" data-retry-job="${j.id}">重试 ↗</button>`:''}<button class="text-button job-log" data-job-log="${j.id}">进度</button><div class="job-events" id="events-${j.id}">${expandedJobs.get(j.id)||''}</div></article>`).join(''):'<div class="empty">暂无任务</div>';
+  $('#job-list').innerHTML=latest.length?latest.map(j=>`<article class="job"><div class="job-kind">${j.kind==='domain'?'领域回扫':j.kind==='blog'?'Blog → 文献库':j.kind==='import'?'arXiv → 文献库':j.kind==='chat'?'论文问答':j.kind==='global'?'研究台':'AI 搜索'}<span>${new Date(j.created*1000).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})}</span></div><h3>${esc(j.query)}</h3><p class="${j.status==='failed'?'error':''}">${esc(j.error||j.result?.message||j.stage)}</p>${j.progress&&j.status==='running'?`<p class="job-progress">${esc(j.progress)}</p>`:''}${['import','blog'].includes(j.kind)&&j.status==='completed'?`<button class="secondary" data-open-imported="${j.result?.paper_id}">打开文献 ↗</button>`:''}${j.kind==='domain'&&j.status==='completed'?`<button class="secondary" data-scan-results="${j.id}">匹配结果 ↗</button>`:''}${['import','blog','domain'].includes(j.kind)&&j.result?.session_id?`<button class="secondary" data-import-session="${j.result.session_id}" data-session-kind="${j.kind}">Codex 会话 ↗</button>`:''}${j.kind==='search'&&j.status==='completed'?`<button class="secondary" data-open-search="${j.id}">查看结果 ↗</button>`:''}${j.kind==='chat'&&j.paper_id?`<button class="secondary" data-open-chat="${j.paper_id}">打开对话 ↗</button>`:''}${['queued','running'].includes(j.status)?`<button class="text-button" data-cancel-job="${j.id}">取消</button>`:''}${['failed','cancelled','interrupted'].includes(j.status)?`<button class="secondary" data-retry-job="${j.id}">重试 ↗</button>`:''}<button class="text-button job-log" data-job-log="${j.id}">进度</button><div class="job-events" id="events-${j.id}">${expandedJobs.get(j.id)||''}</div></article>`).join(''):'<div class="empty">暂无任务</div>';
 }
 async function pollJobs(){
   if(polling)return;polling=true;
@@ -183,7 +183,7 @@ async function pollJobs(){
     for(const j of jobs){
       if(!['completed','failed','cancelled','interrupted'].includes(j.status)||doneJobs.has(j.id))continue;
       doneJobs.add(j.id);
-      if(['import','domain'].includes(j.kind)&&j.status==='completed')imported.push(j);
+      if(['import','blog','domain'].includes(j.kind)&&j.status==='completed')imported.push(j);
       if(j.id===activeSearch){
         if(j.status==='completed'){
           searchResult=j.result;$('#search-status').innerHTML=`<span>${esc(j.result.interpretation)}</span><button id="clear-search" class="text-button">清除 ×</button>`;render();
@@ -197,7 +197,7 @@ async function pollJobs(){
 function openImport(value=''){$('#import-error').textContent='';$('#arxiv-input').value=value;$('#import-dialog').showModal();$('#arxiv-input').focus();}
 async function submitImport(value){
   const result=await api('/api/imports',{query:value}),ids=new Set(result.jobs.map(j=>j.id));
-  $('#import-dialog').close();jobs=[...result.jobs.reverse(),...jobs.filter(j=>!ids.has(j.id))];showJobs();toast(`已提交 ${result.count} 篇论文，重复链接已合并`);
+  $('#import-dialog').close();jobs=[...result.jobs.reverse(),...jobs.filter(j=>!ids.has(j.id))];showJobs();toast(`已提交 ${result.count} 篇文献，重复链接已合并`);
 }
 async function search(){
   const query=$('#search').value.trim();state.query=query;
@@ -208,7 +208,7 @@ async function search(){
   if(!state.ai){searchResult=null;render();return;}
   try{
     const job=await api('/api/jobs',{kind:'search',query});activeSearch=job.id;searchResult=null;
-    Object.assign(state,{scope:'all',collection:'',domain:'',topic:'',year:'',cn:false,notes:false});
+    Object.assign(state,{scope:'all',collection:'',domain:'',topic:'',year:'',sourceType:'',cn:false,notes:false});
     $('#search-status').hidden=false;$('#search-status').innerHTML=`<span class="working">正在理解并检索 ${papers.length} 篇论文</span><button class="text-button" data-cancel-job="${job.id}">取消</button>`;
     render();await pollJobs();
   }catch(e){toast(e.message);}
@@ -251,6 +251,7 @@ $('#search').oninput=e=>{state.query=e.target.value;activeSearch=null;searchResu
 $('#search-mode').onclick=()=>{state.ai=!state.ai;activeSearch=null;searchResult=null;$('#search-mode').textContent=state.ai?'AI':'字';$('#search-mode').setAttribute('aria-pressed',state.ai);$('#search').placeholder=state.ai?'描述你想找的论文':'搜索标题、作者、内容';$('#search-status').hidden=true;render();};
 $('#manage-collections').onclick=()=>collections.open();
 $('#reset').onclick=reset;$('#filter-cn').onclick=()=>{state.cn=!state.cn;render();};$('#filter-notes').onclick=()=>{state.notes=!state.notes;render();};
+$('#source-type').onchange=e=>{state.sourceType=e.target.value;render();};
 $('#year').onchange=e=>{state.year=e.target.value;render();};$('#sort').onchange=e=>{state.sort=e.target.value;render();};
 $('#mobile-domain').onchange=e=>{state.domain=e.target.value;render();};$('#mobile-topic').onchange=e=>{state.topic=e.target.value;render();};
 $('#density').oninput=e=>document.documentElement.style.setProperty('--cols',e.target.value);
@@ -259,7 +260,7 @@ $('#import-close').onclick=()=>$('#import-dialog').close();
 $('#import-form').onsubmit=async e=>{e.preventDefault();const b=$('button[type=submit]',e.target);b.disabled=true;try{await submitImport($('#arxiv-input').value);}catch(err){$('#import-error').textContent=err.message;}finally{b.disabled=false;}};
 $('#refresh').onclick=async()=>{try{$('#refresh').disabled=true;const r=await api('/api/refresh',{});await loadLibrary();toast(r.warnings.length?r.warnings.join('；'):`已刷新 ${r.count} 篇论文`);}catch(e){toast(e.message);}finally{$('#refresh').disabled=false;}};
 document.addEventListener('keydown',e=>{if(!$('#reader').hidden||document.querySelector('dialog[open]'))return;if(e.key==='Escape'&&drawerMode){closeDrawer();return;}if(e.key==='/'&&!e.target.closest('input,textarea,select')){e.preventDefault();$('#search').focus();}});
-document.addEventListener('paste',e=>{if(e.target.closest('input,textarea,[contenteditable]')||!$('#reader').hidden)return;const value=e.clipboardData.getData('text').trim();if(/^https?:\/\/(?:www\.)?arxiv\.org\/(?:abs|pdf|html)\//i.test(value)){e.preventDefault();openImport(value);}});
+document.addEventListener('paste',e=>{if(e.target.closest('input,textarea,[contenteditable]')||!$('#reader').hidden)return;const value=e.clipboardData.getData('text').trim();if(/^https?:\/\//i.test(value)){e.preventDefault();openImport(value);}});
 async function init(){
   const boot=await api('/api/bootstrap');setToken(boot.token);window.paperProvider=boot.settings.provider==='codex'?'Codex':boot.settings.model;reading=boot.reading;await collections.load();await loadLibrary();
   jobs=await api('/api/jobs');for(const j of jobs)if(['completed','failed','cancelled','interrupted'].includes(j.status))doneJobs.add(j.id);

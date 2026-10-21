@@ -2,13 +2,14 @@ import * as pdfjs from '/vendor/pdfjs-dist/legacy/build/pdf.mjs';
 import {marked} from '/vendor/marked/lib/marked.esm.js';
 import katex from '/vendor/katex/dist/katex.mjs';
 import {$,esc,toast} from './api.js';
+import {ArticleView} from './article-reader.js';
 import {PaperChat} from './chat.js';
 
 globalThis.pdfjsLib=pdfjs;
 pdfjs.GlobalWorkerOptions.workerSrc='/vendor/pdfjs-dist/legacy/build/pdf.worker.mjs';
 const pdfUI=import('/vendor/pdfjs-dist/legacy/web/pdf_viewer.mjs');
 // Render paper answers, including TeX and emphasis adjacent to CJK punctuation.
-export const markdown=text=>{
+export const markdown=(text,allowImages=false)=>{
   const math=[];
   // Protect code while extracting math before Markdown consumes TeX backslashes.
   const source=(text||'').replace(/```[\s\S]*?```|`[^`\n]+`|\\\[([\s\S]*?)\\\]|\$\$([\s\S]*?)\$\$|\\\(([\s\S]*?)\\\)|(?<![\\\w])\$([^\n$]+?)\$(?!\w)/g,
@@ -28,7 +29,8 @@ export const markdown=text=>{
   // so its required inline positioning styles survive without allowing author styles.
   const template=document.createElement('template');
   template.innerHTML=DOMPurify.sanitize(rendered,{USE_PROFILES:{html:true},
-    FORBID_TAGS:['img','iframe','form','input','style'],FORBID_ATTR:['style']});
+    FORBID_TAGS:[...(allowImages?[]:['img']),'iframe','form','input','style','button','textarea','select'],FORBID_ATTR:['style'],ALLOW_DATA_ATTR:false});
+  template.content.querySelectorAll('img').forEach(img=>{if(!/^\/article-asset\/[a-f0-9]{20}\/[a-f0-9]{24}\.(png|jpg|gif|webp|avif|svg)$/.test(img.getAttribute('src')||''))img.remove();else{img.loading='lazy';img.removeAttribute('srcset');}});
   const walker=document.createTreeWalker(template.content,NodeFilter.SHOW_TEXT),nodes=[];
   while(walker.nextNode())nodes.push(walker.currentNode);
   for(const node of nodes){
@@ -77,6 +79,8 @@ export class Reader {
   async open(p){
     if(!p)throw Error('论文尚未进入索引，请刷新文献库');
     if(this.paper)await this.flush();
+    this.article?.destroy();this.article=null;
+    if(this.task){await this.task.destroy();this.task=null;}
     await this.options.started?.(p);
     this.chat.stop();
     this.paper=p;this.saved=structuredClone(this.options.getSaved(p.id));
@@ -120,6 +124,10 @@ export class Reader {
       <div class="reading-progress"><span id="reading-progress-fill"></span></div>`;
     this.refreshActions();
     this.renderHighlights();
+    if(p.sourceType==='blog'){
+      this.article=new ArticleView(this,markdown);await this.article.mount();
+      this.renderHighlights();this.chat.open(p);this.switchPanel('chat',false);$('[data-reader=close]',this.host).focus();return;
+    }
     const {PDFViewer,EventBus,PDFLinkService,PDFFindController}=await pdfUI;
     this.bus=new EventBus();this.links=new PDFLinkService({eventBus:this.bus,externalLinkTarget:2,externalLinkRel:'noopener noreferrer'});
     this.findController=new PDFFindController({eventBus:this.bus,linkService:this.links});
@@ -166,6 +174,7 @@ export class Reader {
     $('[data-reader=close]',this.host).focus();
   }
   async load(destination=null){
+    if(this.article)return this.article.load(destination);
     await this.flush();const generation=++this.generation;this.restoring=true;
     this.destination=destination;
     if(this.task)await this.task.destroy();
@@ -204,11 +213,12 @@ export class Reader {
   }
   async close(){
     try{await this.flush();}catch{return;}
-    this.chat.stop();this.generation++;if(this.task)await this.task.destroy();this.task=null;this.pdf=null;this.viewer?.setDocument(null);
+    this.article?.destroy();this.article=null;this.chat.stop();this.generation++;if(this.task)await this.task.destroy();this.task=null;this.pdf=null;this.viewer?.setDocument(null);
     this.host.hidden=true;this.paper=null;this.options.onClose();
   }
-  go(page){if(this.pdf)this.viewer.currentPageNumber=Math.max(1,Math.min(this.pdf.numPages,Math.round(page)||1));}
+  go(page){if(this.article)return this.article.go(page);if(this.pdf)this.viewer.currentPageNumber=Math.max(1,Math.min(this.pdf.numPages,Math.round(page)||1));}
   async jump(language,page){
+    if(this.article){this.language=language;this.article.mode='single';await this.article.load(page);this.chat.pageChanged();return;}
     if(this.language!==language){this.language=language;await this.load(page);}
     else this.viewer.scrollPageIntoView({pageNumber:page});
     this.chat.pageChanged();
@@ -232,7 +242,7 @@ export class Reader {
     this.host.querySelectorAll('[data-reader=focus]').forEach(b=>b.setAttribute('aria-pressed',active));
     (active?$('#viewer-container',this.host):$('.reading-bar [data-reader=focus]',this.host)).focus();
   }
-  find(again=false,previous=false){this.bus.dispatch('find',{source:this,type:again?'again':'',query:$('#pdf-find',this.host).value,caseSensitive:false,entireWord:false,highlightAll:true,findPrevious:previous,matchDiacritics:false});}
+  find(again=false,previous=false){if(this.article)return this.article.find(again,previous);this.bus.dispatch('find',{source:this,type:again?'again':'',query:$('#pdf-find',this.host).value,caseSensitive:false,entireWord:false,highlightAll:true,findPrevious:previous,matchDiacritics:false});}
   async click(e){
     const b=e.target.closest('button');if(!b)return;
     if(b.dataset.panelTab){this.switchPanel(b.dataset.panelTab);return;}
@@ -242,6 +252,8 @@ export class Reader {
     if(b.dataset.highlightPage){const h=this.saved.highlights.find(h=>h.id===b.dataset.highlightPage);await this.jump(h.language,h.page);return;}
     if(b.dataset.askAnnotation){const h=this.saved.highlights.find(h=>h.id===b.dataset.askAnnotation);this.switchPanel('chat');this.chat.setSelection(h);return;}
     const action=b.dataset.reader;if(!action)return;
+    if(action==='bilingual'){this.article.mode=this.article.mode==='bilingual'?'single':'bilingual';await this.article.load(this.article.current);return;}
+    if(this.article&&['original','chinese'].includes(action))this.article.mode='single';
     if(action==='close')return this.close();
     if(action==='collect')return this.options.collect(this.paper);
     if(action==='menu')return this.options.menu?.(e,this.paper);
@@ -251,7 +263,7 @@ export class Reader {
     if(action==='hide-panel')this.switchPanel('chat',false);
     if(action==='page-note')this.addAnnotation({text:'',language:this.language,page:this.viewer.currentPageNumber,rects:[]});
     if(action==='ask-selection'&&this.pendingSelection){this.switchPanel('chat');this.chat.setSelection(this.pendingSelection);$('#selection-action',this.host).hidden=true;window.getSelection()?.removeAllRanges();}
-    if(action==='chinese'||action==='original'){if(action===this.language)return;await this.flush();this.language=action;return this.load();}
+    if(action==='chinese'||action==='original'){if(action===this.language&&!this.article)return;await this.flush();this.language=action;return this.load();}
     if(action==='next')this.go(this.viewer.currentPageNumber+1);
     if(action==='prev')this.go(this.viewer.currentPageNumber-1);
     if(action==='plus')this.viewer.increaseScale();
@@ -270,6 +282,7 @@ export class Reader {
     }
   }
   selection(){
+    if(this.article)return this.article.selection();
     const selection=window.getSelection();const action=$('#selection-action',this.host);
     if(!selection||selection.isCollapsed||!selection.rangeCount){if(action)action.hidden=true;return;}
     const range=selection.getRangeAt(0),start=range.startContainer.parentElement?.closest('.page'),end=range.endContainer.parentElement?.closest('.page');
@@ -281,15 +294,17 @@ export class Reader {
     action.hidden=false;
   }
   renderHighlights(){
+    const unit=this.paper?.sourceType==='blog'?'段':'页';
     $('#annotation-count',this.host).textContent=this.saved.highlights.length||'';
     $('#highlights',this.host).innerHTML=[...this.saved.highlights].sort((a,b)=>a.language.localeCompare(b.language)||a.page-b.page).map(h=>`<article class="annotation-card">
-      <div class="annotation-head"><button data-highlight-page="${h.id}">${h.language==='chinese'?'中':'EN'} · ${h.page} 页 ↗</button><button data-remove-highlight="${h.id}" aria-label="删除批注">×</button></div>
+      <div class="annotation-head"><button data-highlight-page="${h.id}">${h.language==='chinese'?'中':'EN'} · ${h.page} ${unit} ↗</button><button data-remove-highlight="${h.id}" aria-label="删除批注">×</button></div>
       ${h.text?`<button class="annotation-quote" data-highlight-page="${h.id}">${esc(h.text)}</button>`:''}
-      <textarea data-annotation="${h.id}" aria-label="第 ${h.page} 页批注" placeholder="写下批注…" maxlength="20000">${esc(h.comment||'')}</textarea>
+      <textarea data-annotation="${h.id}" aria-label="第 ${h.page} ${unit}批注" placeholder="写下批注…" maxlength="20000">${esc(h.comment||'')}</textarea>
       ${h.text?`<button class="text-button" data-ask-annotation="${h.id}">问这段文字 ↗</button>`:''}
       </article>`).join('')||'<div class="empty-excerpts"><span>⌑</span>选中文字添加批注<br>或为当前页写一条笔记</div>';
   }
   paintHighlights(){
+    if(this.article)return this.article.paint();
     this.host.querySelectorAll('.saved-highlight').forEach(el=>el.remove());
     for(const h of this.saved.highlights.filter(h=>h.language===this.language)){
       const page=this.host.querySelector(`.page[data-page-number="${h.page}"]`);if(!page)continue;

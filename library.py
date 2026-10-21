@@ -120,6 +120,37 @@ def stable_id(arxiv, relative):
     return hashlib.sha256((arxiv_base(arxiv) or relative).encode()).hexdigest()[:20]
 
 
+def parse_sources(raw):
+    """Validate an entire mixed arXiv / public article paste before submission."""
+    from web_sources import normalize_url
+    if not isinstance(raw, str) or not raw.strip() or len(raw) > 32000:
+        raise ValueError('请输入链接或 arXiv 编号（最多 32000 字）')
+    raw = re.sub(r'\[[^\]\n]*\]\((https?://[^\s)]+)\)', r'\1', raw)
+    raw = re.sub(r'(?m)^\s*(?:[-*•]|\d+[.)、])\s+', '', raw)
+    raw = re.sub(r'\barxiv:\s*', '', raw, flags=re.I)
+    tokens = re.split(r'[\s，；;]+|,(?=\s*(?:https?://|\d{4}\.))', raw.strip())
+    result, seen = [], set()
+    for token in tokens:
+        token = token.strip('<>()[]"\'。,')
+        if not token: continue
+        if token.startswith(('arxiv.org/', 'www.arxiv.org/', 'export.arxiv.org/')): token = 'https://' + token
+        try:
+            value = parse_arxiv(token)
+            kind, key = 'import', 'arxiv:' + arxiv_base(value)
+        except ValueError:
+            value = normalize_url(token)
+            from urllib.parse import urlsplit
+            if urlsplit(value).hostname in ('arxiv.org', 'www.arxiv.org', 'export.arxiv.org'):
+                raise ValueError('无效的 arXiv 论文链接')
+            kind, key = 'blog', value
+        if key not in seen:
+            seen.add(key)
+            result.append((kind, value))
+        if len(result) > 50: raise ValueError('一次最多添加 50 篇，请分批提交')
+    if not result: raise ValueError('请输入至少一个链接或编号')
+    return result
+
+
 def frontmatter(path):
     text = path.read_text(encoding="utf-8")
     m = re.match(r"^---\s*\n(.*?)\n---", text, re.S)
@@ -142,7 +173,8 @@ def _refresh():
             metadata = folder / "metadata.json"
             meta = json.loads(metadata.read_text()) if metadata.exists() else {}
             arxiv = str(meta.get("arxiv_id") or props.get("arxiv_id") or "")
-            uid = stable_id(arxiv, str(folder.relative_to(ROOT)))
+            is_blog = meta.get('source_type') == 'blog'
+            uid = meta['id'] if is_blog else stable_id(arxiv, str(folder.relative_to(ROOT)))
             if uid in seen:
                 warnings.append(f"重复编号：{arxiv}")
                 continue
@@ -151,6 +183,8 @@ def _refresh():
             chinese = next((p for p in pdfs if re.search(r"中文|译文", p.name)), None)
             original = next((p for p in pdfs if not re.search(r"中文|译文", p.name)), None)
             source_files = [card] + ([metadata] if metadata.exists() else []) + pdfs
+            if is_blog:
+                source_files += [folder / n for n in ('article.json', 'original.md', 'chinese.md') if (folder / n).exists()]
             source_files += [folder / n[1] for n in NOTE_NAMES.values() if (folder / n[1]).exists()]
             fingerprint = hashlib.sha256("|".join(f"{p}:{p.stat().st_size}:{p.stat().st_mtime_ns}" for p in source_files).encode()).hexdigest()
             if old.get(uid) == fingerprint:
@@ -192,8 +226,17 @@ def _refresh():
                     topics.append(label)
             files = {"card": str(card)}
             pages, evidence = {}, ""
+            if is_blog:
+                article = json.loads((folder / 'article.json').read_text())
+                files['article'] = str(folder / 'article.json')
+                original, chinese = folder / 'original.md', folder / 'chinese.md'
+                files.update(original=str(original), chinese=str(chinese))
+                pages = {'original': len(article['blocks']), 'chinese': len(article['blocks'])}
+                evidence = '\n\n'.join(b['original'] for b in article['blocks'])
+                if not article.get('completed') or not original.exists() or not chinese.exists():
+                    raise ValueError('文章翻译包尚未完成')
             for key, f in (("original", original), ("chinese", chinese)):
-                if not f:
+                if not f or is_blog:
                     continue
                 files[key] = str(f)
                 with PDF_LOCK, fitz.open(f) as pdf:
@@ -214,6 +257,13 @@ def _refresh():
                           created=str(props.get("created") or meta.get("downloaded") or ""),
                           original=bool(original), chinese=bool(chinese), pages=pages,
                           thumb=f"/assets/{uid}.png" if original else None)
+            record.update(sourceType='blog' if is_blog else 'paper',
+                          sourceUrl=meta.get('source_url', '') if is_blog else ('https://arxiv.org/abs/' + arxiv if arxiv else ''),
+                          sourceUrls=meta.get('source_urls', []), site=meta.get('site', ''),
+                          relatedArxiv=meta.get('related_arxiv', []))
+            if is_blog:
+                record['thumb'] = None
+                record['summary'] = record['summary'] or meta.get('classification_reason', '')
             with db() as c:
                 c.execute("INSERT OR REPLACE INTO papers VALUES(?,?,?,?,?)",
                           (uid, json.dumps(record, ensure_ascii=False), json.dumps(files, ensure_ascii=False), evidence, fingerprint))
@@ -318,6 +368,7 @@ def search_catalog():
     for r in rows:
         p = taxonomy.apply(json.loads(r["record"]), registry)
         result.append(dict(id=p["id"], title=p["title"], english=p["english"], year=p["year"],
+                           sourceType=p.get('sourceType', 'paper'), sourceUrl=p.get('sourceUrl', ''), site=p.get('site', ''),
                            domain=p["domainName"], domainName=p["domainName"], topics=p["topics"], authors=p["authors"][:8],
                            abstract=p["abstract"][:1600], insight=p["summary"][:500],
                            source_excerpt=r["evidence"][:2300]))

@@ -7,6 +7,8 @@ Dependencies retain their own license terms and notices. The desktop distributio
 | Electron / Chromium | Desktop shell | MIT and included Chromium third-party notices |
 | Python | Backend runtime | Python Software Foundation License |
 | PyMuPDF / MuPDF | PDF extraction and thumbnails | AGPL-3.0 / Artifex commercial dual license; this project uses AGPL |
+| Beautiful Soup / Soup Sieve | Web article parsing | MIT |
+| Markdownify / six | HTML to Markdown | MIT |
 | PyYAML | Paper metadata | MIT |
 | certifi | CA certificate bundle | MPL-2.0 |
 | PDF.js (`pdfjs-dist`) | PDF rendering and selection | Apache-2.0 |
