@@ -4,6 +4,7 @@ The Electron main process owns the desktop window, directory chooser, encrypted 
 
 - `library.py`: file indexing, PDF evidence and reading-state patches.
 - `collections_store.py`: many-to-many collections with reversible archive/restore.
+- `waiting_list.py`: independent durable reading queue, one-time migration from active favorites, stable pin/order state and explicit reread support. Completing a paper atomically updates reading status and removes its queue entry.
 - `taxonomy.py`: user-owned domains and human assignment overrides, atomic JSON writes.
 - `jobs.py`: durable jobs, cancellation, resumable failure states and Codex transport.
 - `providers.py`: Responses / Chat Completions transports, structured results, incomplete/refusal detection, sanitized errors and no credential forwarding across redirects.
@@ -43,6 +44,8 @@ The 0.3 suite passes 45 tests, including explicit skill attachment, independent 
 The 0.3.1 suite passes 51 tests. Batch cases cover mixed link formats and version deduplication, complete rejection before submitting invalid input, idempotent repeated submissions, visibility of all 50 pending tasks, immediate handling of already archived papers, and a blocked import followed by failure while search and the next import still complete. A dedicated single-worker executor keeps translation serialized without occupying the search/conversation pool. `POST /api/imports` accepts `{query: "links or IDs"}` and returns `{jobs, count}`; each paper retains its ordinary durable job and native conversation.
 
 The 0.4 suite passes 61 tests. Domain-scan cases cover complete pair coverage, fabricated or wrong-page quote rejection, overlapping memberships, unchanged primary/manual assignments, immutable paper files, uncertain suggestions, durable manual exclusions, changed domain/source rejection, same-session retry, automatic scheduling and exclusion of human notes from scan tools. A live scan classified all 184 pairs across a 92-paper snapshot and two domains with verified positive page evidence. These checks establish scope and evidence provenance; semantic relevance and confidence remain model judgments.
+
+The 0.5 suite passes 70 tests. Queue cases verify one-time migration without re-adding removed items, preservation of completed reading, independent collection/queue removal, completion without losing notes or highlights, explicit reread, persistent pin/order, temporarily missing indexed papers and primary-domain removal without losing other memberships. Manual UI checks cover right-click and ⋯ menus, collection/domain submenus, direct removal, pinning, reader completion and persistence after reload. Menus support keyboard navigation and close on Escape or outside interaction; PDF text retains its normal context menu.
 
 ## Known boundaries
 

@@ -25,6 +25,7 @@ import taxonomy
 import settings
 import harness
 import domain_scan
+import waiting_list
 
 PORT = int(os.environ.get("PAPER_READER_PORT", "8767"))
 TOKEN = secrets.token_urlsafe(32)
@@ -120,6 +121,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json({"turns": global_chat.history()})
             if path == "/api/collections":
                 return self.json({"collections": collections_store.listing()})
+            if path == '/api/waiting-list':
+                return self.json({'items': waiting_list.listing()})
             m = re.fullmatch(r"/api/papers/([a-zA-Z0-9]+)/chat", path)
             if m:
                 return self.json({"turns": conversation.history(m[1])})
@@ -251,6 +254,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json(collections_store.assign(m[1], data.get("ids")))
             if path.startswith("/api/reading/"):
                 return self.json(lib.save_reading(path.split("/")[-1], data))
+            m = re.fullmatch(r'/api/waiting-list/([a-zA-Z0-9]+)', path)
+            if m:
+                return self.json(waiting_list.change(m[1], data))
             if path == "/api/refresh":
                 return self.json(lib.refresh())
             m = re.fullmatch(r"/api/jobs/([a-f0-9]+)/(?P<action>cancel|retry)", path)

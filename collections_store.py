@@ -69,8 +69,12 @@ def assign(paper_id, ids):
         active = {r[0] for r in c.execute("SELECT id FROM collections WHERE archived=0")}
         if set(ids) - active:
             raise ValueError("收藏集不存在或已归档，请刷新")
+        previous = {r[0] for r in c.execute('SELECT collection_id FROM collection_items WHERE paper_id=? AND collection_id IN (SELECT id FROM collections WHERE archived=0)', (paper_id,))}
         # Archived memberships are retained for restoration.
         c.execute("DELETE FROM collection_items WHERE paper_id=? AND collection_id IN "
                   "(SELECT id FROM collections WHERE archived=0)", (paper_id,))
         c.executemany("INSERT INTO collection_items VALUES(?,?)", [(i, paper_id) for i in set(ids)])
+        if set(ids) - previous:
+            import waiting_list
+            waiting_list.enqueue(c, paper_id, 'collection')
     return {"collections": listing()}

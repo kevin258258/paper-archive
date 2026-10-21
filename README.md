@@ -9,6 +9,8 @@ A quiet desktop library for papers, reading, and research across papers.
 ## What it does
 
 - **Library:** gallery, catalog and matrix views; keyword and semantic search; your own collections and domains.
+- **Quick actions:** right-click a paper or use its ⋯ button to manage collections, domains and reading state. Checked memberships can be removed directly. Removing a primary domain sends the paper to Unfiled; files and other memberships remain intact.
+- **Waiting list:** a fixed reading queue with pinning, oldest-added-first order, saved progress and a read-complete action in both the queue and reader. Existing active favorites that are not completed migrate once; new unread favorites enter automatically. Queue removal leaves collections intact, and marking complete removes only the queue entry while preserving notes, highlights and memberships.
 - **Reader:** continuous PDF pages, selectable text, outlines, search, bilingual switching, saved positions, highlights and notes.
 - **Codex conversations:** real, persistent local Codex threads in the reader and research workspace. Choose the model and reasoning effort from your installed harness, see streamed answers and tool activity, stop a turn, and continue after restarting the app.
 - **Complete PDF access:** Codex can read any page and view original page images, including figures and equations. Research conversations can browse the whole library or a selected collection. Page citations open the bilingual reader; formulas render locally.
@@ -61,6 +63,8 @@ The program and your library are separate. There is no hosted account or built-i
     taxonomy.json            # editable domains and manual assignments
     state/                   # local SQLite, thumbnails, preferences, job results
 ```
+
+The local SQLite database also stores the reading queue and explicit unread / reading / completed status. A paper may stay collected after it leaves the queue. Re-adding a completed paper to the queue explicitly starts a new unread pass; adding it to another collection alone does not.
 
 Paper contents and queries are sent to the AI provider you choose when you invoke an AI feature. Personal drafts and annotations are not automatically added to cross-paper prompts. The full Codex harness can use your configured local tools and access files permitted by its sandbox. Native threads also persist in your own Codex home directory. Back up that directory if you need to move resumable Codex conversations to another machine.
 

@@ -68,9 +68,16 @@ export class Reader {
     document.addEventListener('visibilitychange',()=>{if(document.hidden&&!this.host.hidden)this.flush();});
     window.addEventListener('pagehide',()=>this.flush());
   }
+  refreshActions(){
+    if(!this.paper)return;const q=this.options.isQueued?.(this.paper.id),status=this.options.getSaved(this.paper.id).status||this.paper.human;
+    const queue=$('[data-reader=queue]',this.host),done=$('[data-reader=complete]',this.host);
+    if(queue){queue.textContent=q?'◷ 待读中':'＋ 待读';queue.setAttribute('aria-label',q?'移出待读清单':'加入待读清单');}
+    if(done){done.disabled=['已读','已读完','读完'].includes(status);done.textContent=done.disabled?'✓ 已读':'✓ 读完';}
+  }
   async open(p){
     if(!p)throw Error('论文尚未进入索引，请刷新文献库');
     if(this.paper)await this.flush();
+    await this.options.started?.(p);
     this.chat.stop();
     this.paper=p;this.saved=structuredClone(this.options.getSaved(p.id));
     this.saved.positions||={};this.saved.highlights||=[];this.dirty={};
@@ -83,6 +90,9 @@ export class Reader {
         <button data-reader="close" class="reader-back" aria-label="关闭阅读器">←</button>
         <div class="reading-title" title="${esc(p.title)}">${esc(p.title)}</div>
         <button data-reader="collect" aria-label="收藏当前论文">◌ 收藏</button>
+        <button data-reader="queue" aria-label="加入待读清单">＋ 待读</button>
+        <button data-reader="complete" aria-label="标记读完">✓ 读完</button>
+        <button data-reader="menu" class="paper-menu-trigger" aria-label="论文更多操作">⋯</button>
         <div class="reading-languages">${p.chinese?'<button data-reader="chinese">中</button>':''}${p.original?'<button data-reader="original">EN</button>':''}</div>
         <button data-reader="focus" aria-label="沉浸阅读" title="沉浸阅读 · F">⛶</button>
       </header>
@@ -108,6 +118,7 @@ export class Reader {
       </div>
       <div id="selection-action" hidden><button data-reader="highlight">＋ 批注</button><button data-reader="ask-selection">✳ 问 AI</button></div>
       <div class="reading-progress"><span id="reading-progress-fill"></span></div>`;
+    this.refreshActions();
     this.renderHighlights();
     const {PDFViewer,EventBus,PDFLinkService,PDFFindController}=await pdfUI;
     this.bus=new EventBus();this.links=new PDFLinkService({eventBus:this.bus,externalLinkTarget:2,externalLinkRel:'noopener noreferrer'});
@@ -233,6 +244,9 @@ export class Reader {
     const action=b.dataset.reader;if(!action)return;
     if(action==='close')return this.close();
     if(action==='collect')return this.options.collect(this.paper);
+    if(action==='menu')return this.options.menu?.(e,this.paper);
+    if(action==='queue'){await this.options.queue?.(this.paper);this.refreshActions();return;}
+    if(action==='complete'){await this.options.complete?.(this.paper);this.refreshActions();return;}
     if(action==='chat'||action==='annotations')this.switchPanel(action);
     if(action==='hide-panel')this.switchPanel('chat',false);
     if(action==='page-note')this.addAnnotation({text:'',language:this.language,page:this.viewer.currentPageNumber,rects:[]});

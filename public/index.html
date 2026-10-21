@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="/vendor/katex/dist/katex.min.css">
   <link rel="stylesheet" href="/collection.css"><link rel="stylesheet" href="/app.css"><link rel="stylesheet" href="/studio.css"><link rel="stylesheet" href="/workspace.css"><link rel="stylesheet" href="/harness.css">
   <script src="/vendor/dompurify/dist/purify.min.js"></script>
+  <link rel="stylesheet" href="/queue.css">
 </head>
 <body>
 <div class="app">
@@ -16,6 +17,7 @@
     <div class="side-section">
       <button class="nav active" data-scope="all"><span>全部藏品</span><span class="mono" id="total">—</span></button>
       <button class="nav" data-scope="marked"><span>已收藏</span><span class="mono" id="marked-count">00</span></button>
+      <button class="nav queue-nav" data-scope="waiting"><span>待读清单</span><span class="mono" id="waiting-count">00</span></button>
       <button class="nav" data-scope="unread"><span>未读</span><span class="mono" id="unread-count">—</span></button>
       <button class="nav" id="open-workspace"><span>✳ 研究台</span><span class="mono">AI</span></button>
     </div>
@@ -51,7 +53,7 @@
       </div>
       <div class="sort-controls">
         <label class="density" title="陈列密度"><input id="density" type="range" min="3" max="7" value="4" aria-label="陈列列数"></label>
-        <select id="sort" aria-label="排序"><option value="relevance" hidden>相关度</option><option value="recent" selected>最近收录</option><option value="year">发表年份</option><option value="title">标题</option></select>
+        <select id="sort" aria-label="排序"><option value="queue" hidden>待读顺序</option><option value="relevance" hidden>相关度</option><option value="recent" selected>最近收录</option><option value="year">发表年份</option><option value="title">标题</option></select>
         <button id="reset" class="text-button">重置 ↗</button>
       </div>
     </section>

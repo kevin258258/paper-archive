@@ -13,7 +13,7 @@ export class Collections {
       }
     });
   }
-  async load(){this.items=(await api('/api/collections')).collections;this.onChange();}
+  async load(){this.items=(await api('/api/collections')).collections;await this.onChange();}
   get active(){return this.items.filter(c=>!c.archived);}
   has(paperId){return this.active.some(c=>c.papers.includes(paperId));}
   open(paper=null){

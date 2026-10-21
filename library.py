@@ -58,6 +58,8 @@ def init_db():
     import collections_store
     import conversation
     collections_store.initialize()
+    import waiting_list
+    waiting_list.initialize()
     conversation.initialize()
     import global_chat
     global_chat.initialize()
@@ -252,13 +254,15 @@ def all_reading():
 
 def save_reading(uid, patch):
     paper(uid)
-    allowed = {"marked", "draft", "positions", "highlights", "language"}
+    allowed = {"marked", "draft", "positions", "highlights", "language", "status"}
     if set(patch) - allowed:
         raise ValueError("未知阅读字段")
     if "draft" in patch and (not isinstance(patch["draft"], str) or len(patch["draft"]) > 200000):
         raise ValueError("笔记过长")
     if "marked" in patch and not isinstance(patch["marked"], bool):
         raise ValueError("无效选集状态")
+    if 'status' in patch and patch['status'] not in ('未读', '在读', '已读'):
+        raise ValueError('无效阅读状态')
     if "language" in patch and patch["language"] not in ("original", "chinese"):
         raise ValueError("无效语言")
     if "positions" in patch:
@@ -300,6 +304,8 @@ def save_reading(uid, patch):
         data = json.loads(row[0]) if row else {}
         data.update(patch)
         c.execute("INSERT OR REPLACE INTO reading VALUES(?,?,?)", (uid, json.dumps(data, ensure_ascii=False), time.time()))
+        if data.get('status') == '已读':
+            c.execute('DELETE FROM reading_queue WHERE paper_id=?', (uid,))
     return data
 
 

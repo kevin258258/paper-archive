@@ -17,4 +17,6 @@ jobs:
       - run: pip install -r requirements.txt
       - run: npm ci
       - run: python scripts/test.py
-      - run: node --check desktop/main.cjs && node --check public/workspace.js && node --check public/harness-chat.js && node --check public/reader.js
+      - run: |
+          node --check desktop/main.cjs
+          for file in public/*.js; do node --check "$file"; done

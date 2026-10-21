@@ -103,11 +103,16 @@ def apply(record, registry=None):
 
 
 def exclude(paper_id, domain_id):
-    lib.paper(paper_id)
+    paper = lib.paper(paper_id)
     with LOCK:
         value = read()
         if not any(d['id'] == domain_id for d in value['domains']):
             raise ValueError('未找到领域')
+        if paper['record']['domain'] == domain_id:
+            value['assignments'][paper_id] = 'unfiled'
+        memberships = value.get('memberships', {}).get(paper_id, [])
+        if domain_id in memberships:
+            memberships.remove(domain_id)
         rows = value.setdefault('exclusions', {}).setdefault(domain_id, [])
         if paper_id not in rows:
             rows.append(paper_id)
