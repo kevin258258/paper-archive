@@ -67,8 +67,8 @@
 <dialog id="import-dialog">
   <form id="import-form">
     <div class="dialog-top"><span>添加论文</span><button type="button" id="import-close" aria-label="关闭添加">×</button></div>
-    <input id="arxiv-input" aria-label="arXiv 链接或编号" placeholder="arxiv.org/abs/…" required autocomplete="off">
-    <p class="field-note">原文 · 中文译本 · 阅读笔记</p>
+    <textarea id="arxiv-input" aria-label="arXiv 链接或编号" placeholder="https://arxiv.org/abs/…&#10;https://arxiv.org/pdf/…" rows="6" maxlength="32000" required autocomplete="off" spellcheck="false"></textarea>
+    <p class="field-note">可一次粘贴多个链接或编号，换行或逗号分隔。最多 50 篇，自动去重，逐篇翻译入库。</p>
     <div id="import-error" class="error" role="alert"></div>
     <button class="primary" type="submit">翻译并入库 ↗</button>
   </form>

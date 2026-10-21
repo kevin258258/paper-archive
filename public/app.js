@@ -117,10 +117,11 @@ async function pollJobs(){
       const detail=await api('/api/jobs/'+j.id);expandedJobs.set(j.id,detail.events.map(ev=>`<p>${esc(ev.message)}</p>`).join(''));
     }
     renderJobs();
+    const imported=[];
     for(const j of jobs){
       if(!['completed','failed','cancelled','interrupted'].includes(j.status)||doneJobs.has(j.id))continue;
       doneJobs.add(j.id);
-      if(j.kind==='import'&&j.status==='completed'){await loadLibrary();toast(j.result?.message||'论文已入库');}
+      if(j.kind==='import'&&j.status==='completed')imported.push(j);
       if(j.id===activeSearch){
         if(j.status==='completed'){
           searchResult=j.result;$('#search-status').innerHTML=`<span>${esc(j.result.interpretation)}</span><button id="clear-search" class="text-button">清除 ×</button>`;render();
@@ -128,12 +129,13 @@ async function pollJobs(){
         $('#search-status').hidden=false;
       }
     }
+    if(imported.length){await loadLibrary();toast(imported.length===1?(imported[0].result?.message||'论文已入库'):`${imported.length} 篇论文已就绪`);}
   }catch(e){$('#connection').textContent='连接中断';}finally{polling=false;}
 }
 function openImport(value=''){$('#import-error').textContent='';$('#arxiv-input').value=value;$('#import-dialog').showModal();$('#arxiv-input').focus();}
 async function submitImport(value){
-  const job=await api('/api/jobs',{kind:'import',query:value});
-  $('#import-dialog').close();jobs=[job,...jobs.filter(j=>j.id!==job.id)];showJobs();
+  const result=await api('/api/imports',{query:value}),ids=new Set(result.jobs.map(j=>j.id));
+  $('#import-dialog').close();jobs=[...result.jobs.reverse(),...jobs.filter(j=>!ids.has(j.id))];showJobs();toast(`已提交 ${result.count} 篇论文，重复链接已合并`);
 }
 async function search(){
   const query=$('#search').value.trim();state.query=query;

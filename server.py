@@ -221,6 +221,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json(taxonomy.assign(m[1], data.get('domain_id')))
             if path == "/api/jobs":
                 return self.json(jobs.create(data.get("kind"), data.get("query")), 202)
+            if path == "/api/imports":
+                return self.json(jobs.create_many(data.get('query')), 202)
             if path == "/api/collections":
                 return self.json(collections_store.save(data), 201)
             m = re.fullmatch(r"/api/collections/([a-f0-9]+)", path)

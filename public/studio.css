@@ -98,7 +98,7 @@ dialog::backdrop{background:#2e2e2e33;backdrop-filter:blur(3px)}
 .primary,.secondary{border-radius:24px;padding:12px 20px;font-size:12px}
 .primary{background:#303030;color:#fff}.primary:hover{background:#171717}
 .secondary{border-color:#d2d2d2;color:#686868}
-#arxiv-input{font-size:17px;border-color:#d0d0d0}
+#arxiv-input{font-size:14px;line-height:1.9;border:1px solid #dedede;border-radius:14px;background:#f1f1f1;padding:15px 17px;resize:vertical;min-height:155px;max-height:45vh}
 .drawer{inset:12px 12px 12px auto;border:1px solid #e7e7e7;border-radius:22px;background:#f9f9f9;padding:0 30px 30px;box-shadow:0 15px 80px #2e2e2e14}
 .drawer-cover{border-radius:15px;background:#ebebeb}.drawer-top{border-color:#e3e3e3}
 .drawer h2{font-size:24px;font-weight:500;color:#373737}

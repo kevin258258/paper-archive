@@ -86,6 +86,34 @@ def arxiv_base(value):
         return ""
 
 
+def parse_arxiv_many(raw):
+    """Validate the complete paste before creating any import jobs."""
+    if not isinstance(raw, str) or not raw.strip() or len(raw) > 32000:
+        raise ValueError('请输入 arXiv 链接或编号（最多 32000 字）')
+    raw = re.sub(r'\[[^\]\n]*\]\((https?://[^\s)]+)\)', r'\1', raw)
+    raw = re.sub(r'(?m)^\s*(?:[-*•]|\d+[.)、])\s+', '', raw)
+    raw = re.sub(r'\barxiv:\s*', '', raw, flags=re.I)
+    tokens = [part for part in re.split(r'[\s,，;；]+', raw.strip()) if part]
+    result, seen = [], set()
+    for n, token in enumerate(tokens, 1):
+        token = token.strip('<>()[]"\'。').rstrip('.')
+        if token.startswith(('arxiv.org/', 'www.arxiv.org/', 'export.arxiv.org/')):
+            token = 'https://' + token
+        try:
+            arxiv = parse_arxiv(token)
+        except ValueError:
+            raise ValueError(f'第 {n} 项不是有效的 arXiv 链接或编号；请用换行或逗号分隔。主题收集需求请先在研究台查找候选。') from None
+        key = arxiv_base(arxiv)
+        if key not in seen:
+            seen.add(key)
+            result.append(arxiv)
+        if len(result) > 50:
+            raise ValueError('一次最多添加 50 篇不同论文，请分批提交')
+    if not result:
+        raise ValueError('请输入至少一个 arXiv 链接或编号')
+    return result
+
+
 def stable_id(arxiv, relative):
     return hashlib.sha256((arxiv_base(arxiv) or relative).encode()).hexdigest()[:20]
 

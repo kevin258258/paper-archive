@@ -17,6 +17,7 @@ import library as lib
 
 SKILL = lib.BASE / "skills/arxiv-translate/SKILL.md"
 POOL = ThreadPoolExecutor(max_workers=3)
+IMPORT_POOL = ThreadPoolExecutor(max_workers=1)
 IMPORT_LOCK = threading.Lock()
 CREATE_LOCK = threading.Lock()
 PROCESSES = {}
@@ -62,7 +63,10 @@ def get(uid, with_events=True):
 
 def recent():
     with lib.db() as c:
-        ids = [r[0] for r in c.execute("SELECT id FROM jobs ORDER BY created DESC LIMIT 30")]
+        ids = [r[0] for r in c.execute("""SELECT id FROM jobs
+            WHERE status IN ('queued','running') OR id IN
+                (SELECT id FROM jobs ORDER BY created DESC LIMIT 30)
+            ORDER BY created DESC""")]
     return [get(uid, False) for uid in ids]
 
 
@@ -82,8 +86,22 @@ def create(kind, query, submit=True):
         c.execute("INSERT INTO jobs VALUES(?,?,?,?,?,?,?,?,?)",
                   (uid, kind, "queued", query, "等待处理", None, None, now, now))
     if submit:
-        POOL.submit(run, uid)
+        try:
+            known = existing_result(query) if kind == 'import' else None
+        except RuntimeError:
+            known = None  # Keep version conflicts as individual task failures.
+        if known:
+            update(uid, status='completed', stage='完成', result=known)
+        else:
+            (IMPORT_POOL if kind == 'import' else POOL).submit(run, uid)
     return get(uid)
+
+
+def create_many(raw, submit=True):
+    arxivs = lib.parse_arxiv_many(raw)
+    # Validate first; malformed later entries must not start earlier papers.
+    batch = [create('import', arxiv, submit=submit) for arxiv in arxivs]
+    return {'jobs': batch, 'count': len(batch)}
 
 
 def retry(uid):
@@ -134,9 +152,9 @@ def cancel(uid):
 def recover():
     with lib.db() as c:
         c.execute("UPDATE jobs SET status='interrupted',stage='服务重启，任务中断',error='可重试，已有文件会复用' WHERE status='running'")
-        queued = [r[0] for r in c.execute("SELECT id FROM jobs WHERE status='queued'")]
-    for uid in queued:
-        POOL.submit(run, uid)
+        queued = list(c.execute("SELECT id,kind FROM jobs WHERE status='queued' ORDER BY created,id"))
+    for uid, kind in queued:
+        (IMPORT_POOL if kind == 'import' else POOL).submit(run, uid)
 
 
 def cli_args(search=True):

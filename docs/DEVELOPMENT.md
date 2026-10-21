@@ -39,6 +39,8 @@ The 0.2 verification passed 37 automated tests and exercised a real Codex app-se
 
 The 0.3 suite passes 45 tests, including explicit skill attachment, independent import defaults, same-thread import retries, immutable sources, mathematical damage rejection, complete PDF coverage and current translated page images. A streaming regression case covers native command items whose initial output is null. Compilation and finalization are separate checks; an interrupted agent cannot mark an unfinished package complete.
 
+The 0.3.1 suite passes 51 tests. Batch cases cover mixed link formats and version deduplication, complete rejection before submitting invalid input, idempotent repeated submissions, visibility of all 50 pending tasks, immediate handling of already archived papers, and a blocked import followed by failure while search and the next import still complete. A dedicated single-worker executor keeps translation serialized without occupying the search/conversation pool. `POST /api/imports` accepts `{query: "links or IDs"}` and returns `{jobs, count}`; each paper retains its ordinary durable job and native conversation.
+
 ## Known boundaries
 
 - Native Codex can browse all papers in the selected scope; its context window and decisions still limit actual coverage. Each text-tool call reads at most 20 pages, with further ranges available. No six-paper or total-text cap is imposed on a Codex conversation.
