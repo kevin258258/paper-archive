@@ -182,3 +182,12 @@ class ArticleTests(unittest.TestCase):
             {'id': item['id'], 'score': .9, 'reason': '讨论内部特征', 'uncertainty': '', 'evidence': item['site']}]}
         result = jobs.validate_results(answer, catalog)
         self.assertTrue(result['results'][0]['verified'])
+
+    def test_svg_preserves_local_plot_shapes_and_removes_active_external_content(self):
+        svg = b'''<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><defs><path id="curve" d="M0 0 L10 10"/><clipPath id="clip"><rect width="20" height="20"/></clipPath></defs><g clip-path="url(#clip)"><use xlink:href="#curve"/></g><use href="https://evil.test/plot.svg"/><script>bad()</script><animate attributeName="href" values="https://evil.test"/><rect onload="bad()" style="fill:url(https://evil.test)"/></svg>'''
+        kind, body = articles.image_bytes(svg, 'image/svg+xml')
+        self.assertEqual(kind, 'svg')
+        self.assertIn(b'#curve', body)
+        self.assertIn(b'url(#clip)', body)
+        for forbidden in (b'evil.test', b'onload', b'bad()', b'<script', b'<animate'):
+            self.assertNotIn(forbidden, body)

@@ -41,13 +41,19 @@ def image_bytes(body, mime):
     if b'ftypavif' in body[:32]: return 'avif'
     if 'image/svg+xml' in mime:
         import xml.etree.ElementTree as ET
-        root = ET.fromstring(body)
+        try: root = ET.fromstring(body)
+        except ET.ParseError as exc: raise ValueError('无法读取 SVG 图片') from exc
         if root.tag.rsplit('}', 1)[-1] != 'svg': raise ValueError('不是 SVG')
         for parent in root.iter():
             for child in list(parent):
-                if child.tag.rsplit('}', 1)[-1] in ('script', 'foreignObject', 'style', 'a', 'image', 'use'): parent.remove(child)
+                if child.tag.rsplit('}', 1)[-1] in ('script', 'foreignObject', 'style', 'a', 'image', 'animate', 'animateMotion', 'animateTransform', 'set', 'discard'): parent.remove(child)
             for key, value in list(parent.attrib.items()):
-                if key.lower().startswith('on') or key.rsplit('}', 1)[-1] in ('href', 'src') or re.search(r'url\(|javascript:', value, re.I): del parent.attrib[key]
+                name = key.rsplit('}', 1)[-1].lower()
+                local_reference = name == 'href' and re.fullmatch(r'#[A-Za-z0-9_.:-]+', value)
+                urls = re.findall(r'url\(([^)]*)\)', value, re.I)
+                external = any(not re.fullmatch(r'\s*[\'"]?#[A-Za-z0-9_.:-]+[\'"]?\s*', item) for item in urls)
+                if name.startswith('on') or (name in ('href', 'src') and not local_reference) or external or re.search(r'javascript:|@import', value, re.I):
+                    del parent.attrib[key]
         return 'svg', ET.tostring(root)
     raise ValueError('不支持的图片格式')
 
