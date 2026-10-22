@@ -89,7 +89,7 @@ export class HarnessChat {
     const epoch=++this.epoch;clearTimeout(this.timer);this.uid=uid;this.session=null;this.signature='';
     if(!this.drafts.has(uid||'new')){const draft=await api('/api/harness/drafts?key='+this.draftKey(uid||'new'));if(epoch!==this.epoch)return;this.drafts.set(uid||'new',draft.text);this.files.set(uid||'new',draft.attachments);}
     $('[data-sessions]',this.root).value=uid;$('.harness-composer textarea',this.root).value=this.drafts.get(uid||'new')||'';
-    this.error('');this.setSelection(null);this.renderFiles();this.render();this.configureModels();
+    this.error('');this.setSelection(null);this.renderFiles();this.render();this.configureModels();this.showScope();
     if(uid)await this.poll(epoch);
   }
   configureModels(){
