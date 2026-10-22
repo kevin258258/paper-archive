@@ -99,6 +99,24 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json({"path": file})
             if path == "/api/library":
                 return self.json({"papers": lib.papers()})
+            m = re.fullmatch(r'/api/harness/sessions/([a-f0-9]+)/file(?:-location)?', path)
+            if m:
+                import session_files
+                name=parse_qs(urlparse(self.path).query).get('path',[''])[0]
+                metadata,file=session_files.locate(m[1],name)
+                if path.endswith('-location'): return self.json(metadata)
+                return self.file(file, metadata['mime'] if metadata['mime'] in ('image/png','image/jpeg','image/gif','image/webp') else 'application/octet-stream')
+            m = re.fullmatch(r'/api/harness/attachments/([a-f0-9]{32})', path)
+            if m:
+                import attachments
+                attachment, file = attachments.resolve(m[1])
+                return self.file(file, attachment['mime'] if attachment['kind']=='image' else 'application/octet-stream')
+            if path == '/api/harness/drafts':
+                import reader_workspace
+                return self.json(reader_workspace.draft(parse_qs(urlparse(self.path).query).get('key',[''])[0]))
+            if path == '/api/reader-workspace':
+                import reader_workspace
+                return self.json(reader_workspace.read())
             m = re.fullmatch(r'/api/articles/([a-f0-9]{20})', path)
             if m:
                 import articles
@@ -210,6 +228,12 @@ class Handler(BaseHTTPRequestHandler):
             return self.json({"error": "不允许的来源"}, 403)
         if not secrets.compare_digest(self.headers.get("X-Paper-Token", ""), TOKEN):
             return self.json({"error": "请刷新页面后重试"}, 403)
+        if urlparse(self.path).path == '/api/harness/attachments':
+            try:
+                import attachments
+                name=parse_qs(urlparse(self.path).query).get('name',['attachment'])[0]
+                return self.json(attachments.receive(self.rfile, name, int(self.headers.get('Content-Length',0))), 201)
+            except (ValueError, OSError) as exc: return self.json({'error':str(exc)},400)
         if self.headers.get_content_type() != "application/json":
             return self.json({"error": "需要 JSON"}, 415)
         try:
@@ -220,15 +244,21 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(data, dict):
                 raise ValueError("无效请求")
             path = urlparse(self.path).path
+            if path == '/api/harness/drafts':
+                import reader_workspace
+                return self.json(reader_workspace.draft(data.get('key'),data))
+            if path == '/api/reader-workspace':
+                import reader_workspace
+                return self.json(reader_workspace.save(data))
             if path == "/api/settings":
                 return self.json(settings.save(data))
             if path == "/api/harness/connect":
                 return self.json(harness.capabilities())
             if path == "/api/harness/sessions":
                 return self.json(harness.create(data), 201)
-            m = re.fullmatch(r"/api/harness/sessions/([a-f0-9]+)/(turn|interrupt|respond)", path)
+            m = re.fullmatch(r"/api/harness/sessions/([a-f0-9]+)/(turn|steer|interrupt|respond)", path)
             if m:
-                operation = {"turn": harness.start, "respond": harness.respond,
+                operation = {"turn": harness.start, "steer": harness.steer, "respond": harness.respond,
                              "interrupt": lambda uid, _: harness.interrupt(uid)}[m[2]]
                 return self.json(operation(m[1], data))
             if path == "/api/domains":

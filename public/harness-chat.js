@@ -1,4 +1,4 @@
-import {api,esc,$,toast} from './api.js';
+import {api,esc,$,toast,uploadAttachment} from './api.js';
 import {markdown} from './reader.js';
 
 const busy=s=>['starting','running','waiting'].includes(s?.status);
@@ -31,7 +31,7 @@ function patchContent(host,html){
 /** Shared Codex conversation surface for the reader and the whole library. */
 export class HarnessChat {
   constructor(root,options){
-    this.root=root;this.options=options;this.epoch=0;this.selection=null;this.drafts=new Map();
+    this.root=root;this.options=options;this.epoch=0;this.selection=null;this.drafts=new Map();this.files=new Map();this.uploading=0;
     root.classList.add('harness-chat');
     root.innerHTML=`<header class="harness-header"><span class="harness-brand">✳ <span>Codex</span></span>
       <select data-sessions aria-label="Codex 会话"><option value="">新对话</option></select>
@@ -40,20 +40,27 @@ export class HarnessChat {
       <div class="harness-scope"></div><div class="harness-feed" role="log" aria-label="Codex 对话"></div>
       <div class="harness-requests"></div>
       <form class="harness-composer">
-        <div class="harness-attachment"></div><div class="harness-selection" hidden></div>
-        <textarea aria-label="给 Codex 发消息" placeholder="给 Codex 发消息…" rows="3" maxlength="100000" required></textarea>
-        <div class="harness-controls"><select data-model aria-label="Codex 模型" title="模型"><option value="">连接本机 Codex…</option></select>
+        <div class="harness-attachment"></div><div class="harness-file-tray"></div><div class="harness-selection" hidden></div><input data-file-input type="file" multiple hidden aria-label="选择 Codex 附件">
+        <textarea aria-label="给 Codex 发消息" placeholder="给 Codex 发消息…" rows="3" maxlength="100000"></textarea>
+        <div class="harness-controls"><button type="button" class="harness-add-file" data-action="attach" aria-label="添加文件或图片" title="添加文件、图片 · 支持拖入和粘贴">＋</button><select data-model aria-label="Codex 模型" title="模型"><option value="">连接本机 Codex…</option></select>
           <select data-effort aria-label="推理强度" title="推理强度"><option value="">沿用本机</option></select>
+          <select data-permissions aria-label="Codex 权限" title="会话权限"><option value="inherit">本机默认</option><option value="read-only">只读</option><option value="workspace-write">工作区写入</option><option value="danger-full-access">完全访问</option></select>
           <button type="button" data-action="stop" aria-label="停止 Codex 回答" hidden>■</button>
           <button type="submit" aria-label="发送给 Codex">↑</button></div>
-      </form><div class="harness-footer"><span data-status>本机 harness · 读取资料</span><span data-usage></span></div>
+      </form><div class="harness-footer"><span data-status>本机 Codex</span><span data-usage></span></div>
       <p class="harness-error error" role="alert"></p>`;
     if(['import','domain','intake'].includes(options.kind)){for(const action of ['new','legacy'])$('[data-action='+action+']',root).hidden=true;}
+    if(!['paper','library'].includes(options.kind))$('[data-permissions]',root).hidden=true;
+    $('[data-file-input]',root).onchange=e=>{this.addFiles([...e.target.files]);e.target.value='';};
+    root.addEventListener('paste',e=>{const files=[...(e.clipboardData?.files||[])];if(files.length){e.preventDefault();this.addFiles(files);}});
+    root.addEventListener('dragover',e=>{if([...e.dataTransfer.types].includes('Files')){e.preventDefault();root.classList.add('harness-dragging');}});
+    root.addEventListener('dragleave',e=>{if(!root.contains(e.relatedTarget))root.classList.remove('harness-dragging');});
+    root.addEventListener('drop',e=>{root.classList.remove('harness-dragging');if(e.dataTransfer.files.length){e.preventDefault();this.addFiles([...e.dataTransfer.files]);}});
     $('form',root).onsubmit=e=>{e.preventDefault();this.send();};
-    $('textarea',root).onkeydown=e=>{
-      if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();if(!busy(this.session))$('form',root).requestSubmit();}
+    $('.harness-composer textarea',root).onkeydown=e=>{
+      if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();$('form',root).requestSubmit();}
     };
-    $('textarea',root).oninput=e=>{this.drafts.set(this.uid||'new',e.target.value);};
+    $('.harness-composer textarea',root).oninput=e=>{this.drafts.set(this.uid||'new',e.target.value);this.queueDraft();};
     $('[data-model]',root).onchange=()=>this.updateEffort();
     $('[data-sessions]',root).onchange=e=>this.switchSession(e.target.value);
     root.onclick=e=>this.click(e).catch(err=>this.error(err));
@@ -65,19 +72,24 @@ export class HarnessChat {
       const [caps,list]=await Promise.all([connect(),api('/api/harness/sessions?'+new URLSearchParams({kind:this.options.kind,paper_id:this.options.paper_id||''}))]);
       if(epoch!==this.epoch)return;
       this.caps=caps;this.sessions=list.sessions;this.renderSessions();
-      await this.switchSession(this.uid===undefined?(this.sessions[0]?.id||''):this.uid);
+      const draft=await api('/api/harness/drafts?key='+this.draftKey('new'));
+      if(epoch!==this.epoch)return;
+      if(draft.text||draft.attachments.length){this.drafts.set('new',draft.text);this.files.set('new',draft.attachments);}
+      await this.switchSession(this.uid===undefined?((draft.text||draft.attachments.length)?'':(this.sessions[0]?.id||'')):this.uid);
     }catch(e){if(epoch===this.epoch)this.error(e);}
   }
-  close(){this.closed=true;this.epoch++;clearTimeout(this.timer);}
+  close(){this.flushDraft();this.closed=true;this.epoch++;clearTimeout(this.timer);}
   error(error){$('.harness-error',this.root).textContent=error?.message||error||'';}
   renderSessions(){
     $('[data-sessions]',this.root).innerHTML=(['import','domain','intake'].includes(this.options.kind)?'':'<option value="">新对话</option>')+this.sessions.map(s=>`<option value="${s.id}">${esc(s.title)}</option>`).join('');
     $('[data-sessions]',this.root).value=this.uid||'';
   }
   async switchSession(uid){
+    this.flushDraft();
     const epoch=++this.epoch;clearTimeout(this.timer);this.uid=uid;this.session=null;this.signature='';
-    $('[data-sessions]',this.root).value=uid;$('textarea',this.root).value=this.drafts.get(uid||'new')||'';
-    this.error('');this.setSelection(null);this.render();this.configureModels();
+    if(!this.drafts.has(uid||'new')){const draft=await api('/api/harness/drafts?key='+this.draftKey(uid||'new'));if(epoch!==this.epoch)return;this.drafts.set(uid||'new',draft.text);this.files.set(uid||'new',draft.attachments);}
+    $('[data-sessions]',this.root).value=uid;$('.harness-composer textarea',this.root).value=this.drafts.get(uid||'new')||'';
+    this.error('');this.setSelection(null);this.renderFiles();this.render();this.configureModels();
     if(uid)await this.poll(epoch);
   }
   configureModels(){
@@ -87,6 +99,7 @@ export class HarnessChat {
     const preferred=this.session?.model||this.caps.default_model;
     el.value=this.caps.models.some(m=>m.model===preferred)?preferred:(this.caps.models.find(m=>m.isDefault)||this.caps.models[0]).model;
     this.updateEffort(this.session?.effort||this.caps.default_effort);
+    $('[data-permissions]',this.root).value=this.session?.permissions||'inherit';
   }
   updateEffort(preferred=''){
     const m=this.caps?.models.find(m=>m.model===$('[data-model]',this.root).value);if(!m)return;
@@ -115,6 +128,33 @@ export class HarnessChat {
     const el=$('.harness-selection',this.root);el.hidden=!value;
     el.innerHTML=value?`<span>${esc(value.text)}</span><button type="button" data-action="clear-selection" aria-label="移除选文">×</button>`:'';
   }
+  draftKey(uid=this.uid||'new'){return [this.options.kind,this.options.paper_id||'all',uid].join(':');}
+  queueDraft(){
+    clearTimeout(this.draftTimer);
+    this.pendingDraft={key:this.draftKey(),text:$('.harness-composer textarea',this.root).value,attachments:(this.files.get(this.uid||'new')||[]).map(f=>f.id)};
+    this.draftTimer=setTimeout(()=>this.flushDraft(),400);
+  }
+  flushDraft(){
+    clearTimeout(this.draftTimer);const data=this.pendingDraft;if(!data)return;this.pendingDraft=null;
+    this.draftSaves=(this.draftSaves||Promise.resolve()).catch(()=>{}).then(()=>api('/api/harness/drafts',data)).catch(e=>this.error(e));
+  }
+  fileMarkup(files=[],removable=false){
+    return files.length?`<div class="harness-files">${files.map(f=>`<div class="harness-file">${f.kind==='image'?`<img src="/api/harness/attachments/${f.id}" alt="${esc(f.name)}">`:'<span class="harness-file-icon">▤</span>'}<a href="/api/harness/attachments/${f.id}" download="${esc(f.name)}" title="${esc(f.name)}">${esc(f.name)}<small>${f.size>1000000?(f.size/1000000).toFixed(1)+' MB':Math.max(1,Math.round(f.size/1000))+' KB'}</small></a>${removable?`<button type="button" data-remove-file="${f.id}" aria-label="移除附件 ${esc(f.name)}">×</button>`:''}</div>`).join('')}</div>`:'';
+  }
+  renderFiles(){
+    $('[type=submit]',this.root).disabled=!!this.uploading||this.sending||!this.caps;
+    $('.harness-file-tray',this.root).innerHTML=this.fileMarkup(this.files.get(this.uid||'new')||[],true)+(this.uploading?'<span class="harness-uploading">正在添加附件…</span>':'');
+  }
+  async addFiles(files){
+    const key=this.uid||'new';this.error('');this.uploading+=files.length;this.renderFiles();
+    try{
+      for(const file of files){
+        try{const attachment=await uploadAttachment(file);this.files.set(key,[...(this.files.get(key)||[]),attachment]);if(key===(this.uid||'new'))this.queueDraft();else api('/api/harness/drafts',{key:this.draftKey(key),text:this.drafts.get(key)||'',attachments:this.files.get(key).map(f=>f.id)}).catch(e=>this.error(e));}
+        catch(e){this.error(e);}
+        finally{this.uploading--;this.renderFiles();}
+      }
+    }finally{this.renderFiles();$('.harness-composer textarea',this.root).focus();}
+  }
   async poll(epoch=this.epoch){
     if(!this.uid||this.closed)return;
     try{
@@ -131,15 +171,15 @@ export class HarnessChat {
     const s=this.session,signature=s?.revision??'empty';if(this.signature===signature)return;this.signature=signature;
     const feed=$('.harness-feed',this.root),bottom=feed.scrollHeight-feed.scrollTop-feed.clientHeight<100;
     const opened=new Set([...feed.querySelectorAll('details[open]')].map(el=>el.dataset.item));
-    const content=s?.turns.length?s.turns.map(t=>`<article class="harness-turn"><div class="harness-user">${esc(t.question)}</div>
+    const content=s?.turns.length?s.turns.map(t=>`<article class="harness-turn"><div class="harness-user">${esc(t.question)}${this.fileMarkup(t.attachments)}</div>
       ${t.context.selection?`<details class="harness-reference"><summary>选文 · ${t.context.language==='chinese'?'中':'EN'} ${t.context.page} 页</summary><p>${esc(t.context.selection)}</p></details>`:''}
       <div class="harness-turn-label">✳ Codex <span>${esc(t.model)} · ${efforts[t.effort]||t.effort}</span></div>
       ${t.items.map(i=>this.item(i,opened)).join('')}
       ${['starting','running'].includes(t.status)?'<p class="harness-working working">正在处理…</p>':''}
       ${t.status==='interrupted'?'<p class="harness-muted">已停止</p>':''}
       ${t.error?`<p class="error">${esc(t.error)}</p>`:''}
-      </article>`).join(''):`<div class="harness-empty"><div class="harness-mark" aria-hidden="true">✳</div><h2>${this.options.kind==='paper'?'深入这篇论文':'从论文之间，开始。'}</h2>
-      <p>${this.options.kind==='paper'?'正文、公式、图表，同一个会话。':'完整的 Codex 会话，连接你的研究。'}</p>
+      </article>`).join(''):`<div class="harness-empty"><div class="harness-mark" aria-hidden="true">✳</div><h2>${this.options.kind==='paper'?'向 Codex 提问':'Codex'}</h2>
+      <p>${this.options.kind==='paper'?'':''}</p>
       <div class="harness-starters">${(this.options.kind==='paper'?[
         ['拆解方法','详细解释这篇论文的核心方法与关键公式，结合图表和实验，指出假设与局限。'],
         ['解释当前页','结合全文解释当前页的概念和公式，需要时查看原始页面图像。']
@@ -151,10 +191,13 @@ export class HarnessChat {
     const pending=JSON.stringify(s?.requests||[]);
     if(pending!==this.requestSignature){this.requestSignature=pending;$('.harness-requests',this.root).innerHTML=(s?.requests||[]).map(r=>this.request(r)).join('');}
     const working=busy(s);
-    $('[type=submit]',this.root).hidden=working;$('[data-action=stop]',this.root).hidden=!working;
-    $('[type=submit]',this.root).disabled=!this.caps||this.sending;
-    $('[data-model]',this.root).disabled=working;$('[data-effort]',this.root).disabled=working;
-    $('[data-status]',this.root).textContent=s?.status==='waiting'?'等待你的回复':working?'Codex 正在工作':'本机 harness · 读取资料';
+    const canSteer=['paper','library'].includes(this.options.kind)&&!!s?.turns?.at(-1)?.native_id;
+    $('[type=submit]',this.root).hidden=working&&!canSteer;$('[data-action=stop]',this.root).hidden=!working;
+    $('[type=submit]',this.root).setAttribute('aria-label',working?'补充给 Codex':'发送给 Codex');
+    $('[type=submit]',this.root).title=working?'在当前回答中补充消息':'发送消息';
+    $('[type=submit]',this.root).disabled=!this.caps||this.sending||!!this.uploading;
+    $('[data-model]',this.root).disabled=working;$('[data-effort]',this.root).disabled=working;$('[data-permissions]',this.root).disabled=working;
+    $('[data-status]',this.root).textContent=s?.status==='waiting'?'等待你的回复':working?'Codex 正在工作':'本机 Codex · 沿用本机配置';
     const usage=s?.usage,last=usage?.last?.totalTokens;
     $('[data-usage]',this.root).textContent=last?`${Number(last).toLocaleString()} tokens${usage.modelContextWindow?' / '+Math.round(usage.modelContextWindow/1000)+'k':''}`:'';
     if(s?.error)this.error(s.error);
@@ -162,6 +205,7 @@ export class HarnessChat {
     if(s){const option=$(`[data-sessions] option[value="${s.id}"]`,this.root);if(option)option.textContent=s.title;}
   }
   item(i,opened){
+    if(i.type==='userMessage')return `<div class="harness-user">${esc(i.text)}${this.fileMarkup(i.attachments)}</div>`;
     if(i.type==='agentMessage')return `<div class="markdown harness-answer ${i.phase==='commentary'?'is-commentary':''}">${markdown(i.text)}</div>`;
     const label={reasoning:'思考摘要',commandExecution:'运行命令',dynamicToolCall:i.tool,mcpToolCall:`${i.server} · ${i.tool}`,fileChange:'文件变更',plan:'计划',webSearch:'搜索网页'}[i.type]||i.type;
     let body=i.type==='reasoning'?(i.summary?.join('\n')||i.summaryText||''):i.text||i.command||JSON.stringify(i.arguments||i.changes||{},null,2);
@@ -171,13 +215,15 @@ export class HarnessChat {
   }
   request(r){
     const p=r.params;
+    if(r.method==='mcpServer/elicitation/request')return `<div class="harness-request" data-mcp-request="${r.id}"><strong>连接器请求</strong><p>${esc(p.message||p.title||'连接器需要你的回复')}</p>${p.url?`<a href="${esc(p.url)}" target="_blank" rel="noopener">打开连接器 ↗</a>`:''}${p.requestedSchema?'<textarea data-mcp-content aria-label="连接器回复 JSON" placeholder="{}"></textarea>':''}<button data-mcp="${r.id}" data-mcp-action="decline">拒绝</button><button data-mcp="${r.id}" data-mcp-action="accept">提交回复</button></div>`;
     if(r.method.endsWith('requestUserInput'))return `<form class="harness-request" data-request="${r.id}"><strong>Codex 需要你的回复</strong>${p.questions.map(q=>`<label>${esc(q.question)}<input name="${esc(q.id)}" list="choices-${r.id}-${esc(q.id)}" required placeholder="填写回答或选择建议"><datalist id="choices-${r.id}-${esc(q.id)}">${(q.options||[]).map(o=>`<option value="${esc(o.label)}">${esc(o.description)}</option>`).join('')}</datalist></label>`).join('')}<button type="button" data-answer="${r.id}">回复</button></form>`;
     const item=this.session?.turns.flatMap(t=>t.items).find(i=>i.id===p.itemId);
     return `<div class="harness-request"><strong>Codex 请求授权</strong><p>${esc(p.reason||'此操作需要你的批准')}</p><pre>${esc(p.command||JSON.stringify(p.permissions||p.changes||item?.changes||{},null,2))}</pre><button data-approval="${r.id}" data-decision="decline">拒绝</button><button data-approval="${r.id}" data-decision="accept">允许这次</button></div>`;
   }
   async send(){
-    const input=$('textarea',this.root),question=this.options.kind==='intake'?input.value:input.value.trim();if(!question.trim()||this.sending||busy(this.session))return;
-    const epoch=this.epoch;this.sending=true;this.error('');
+    const input=$('.harness-composer textarea',this.root),files=this.files.get(this.uid||'new')||[],question=input.value||(files.length?'请查看我附上的文件。':'');if(!question.trim()||this.sending||this.uploading)return;
+    if(busy(this.session)&&!['paper','library'].includes(this.options.kind))return;
+    const epoch=this.epoch,draftKey=this.draftKey();this.flushDraft();this.sending=true;this.error('');
     try{
       if(!this.caps)throw Error('尚未连接 Codex。点击新对话重试。');
       if(!this.uid){
@@ -187,28 +233,48 @@ export class HarnessChat {
         this.session=await api('/api/harness/sessions',{kind:this.options.kind,paper_id:this.options.paper_id,
           paper_ids:scope?.papers||[],scope:scope?.name||this.options.title||'当前论文'});
         if(epoch!==this.epoch)return;
-        this.uid=this.session.id;this.sessions.unshift(this.session);this.renderSessions();this.showScope();
+        this.uid=this.session.id;this.files.set(this.uid,files);this.drafts.set(this.uid,question);this.queueDraft();this.sessions.unshift(this.session);this.renderSessions();this.showScope();
       }
       const context=this.options.context?.()||{};
       if(this.selection)Object.assign(context,{selection:this.selection.text,language:this.selection.language,page:this.selection.page});
-      const result=await api(`/api/harness/sessions/${this.uid}/turn`,{question,context,
+      const result=await api(`/api/harness/sessions/${this.uid}/${busy(this.session)?'steer':'turn'}`,{question,context,attachments:files.map(f=>f.id),permissions:$('[data-permissions]',this.root).value,
         model:$('[data-model]',this.root).value,effort:$('[data-effort]',this.root).value});
       if(epoch!==this.epoch)return;
-      input.value='';this.drafts.delete(this.uid);this.drafts.delete('new');this.setSelection(null);
+      const submittedDraftKey=this.draftKey();
+      input.value='';this.drafts.delete(this.uid);this.drafts.delete('new');this.files.delete(this.uid);this.files.delete('new');clearTimeout(this.draftTimer);this.pendingDraft=null;this.renderFiles();this.setSelection(null);
+      this.draftSaves=(this.draftSaves||Promise.resolve()).catch(()=>{}).then(async()=>{await api('/api/harness/drafts',{key:draftKey,text:'',attachments:[]});if(draftKey!==submittedDraftKey)await api('/api/harness/drafts',{key:submittedDraftKey,text:'',attachments:[]});}).catch(e=>this.error(e));
       this.session=result;this.scrollNext=true;this.render();clearTimeout(this.timer);await this.poll(epoch);
     }catch(e){if(epoch===this.epoch)this.error(e);}
     finally{this.sending=false;if(epoch===this.epoch)$('[type=submit]',this.root).disabled=false;}
+  }
+  async previewFile(path){
+    if(!this.uid)return;
+    const base='/api/harness/sessions/'+this.uid+'/file';
+    const file=await api(base+'-location?path='+encodeURIComponent(path));
+    const url=base+'?path='+encodeURIComponent(path),dialog=document.createElement('dialog');dialog.className='harness-file-preview';
+    let content='';
+    if(['image/png','image/jpeg','image/webp','image/gif'].includes(file.mime))content=`<img src="${esc(url)}" alt="${esc(file.name)}">`;
+    else if(file.size<2000000&&(/text|json|javascript|xml/.test(file.mime)||/\.(md|py|tex|csv|log)$/i.test(file.name)))content=`<pre>${esc(await fetch(url).then(r=>r.text()))}</pre>`;
+    dialog.innerHTML=`<div class="dialog-top"><span>${esc(file.name)}</span><button data-close-preview aria-label="关闭文件预览">×</button></div>${content}<div class="harness-preview-actions"><a href="${esc(url)}" download="${esc(file.name)}">下载文件 ↗</a>${window.desktop?.openSessionFile?'<button data-open-native>在本机打开 ↗</button>':''}</div>`;
+    $('[data-close-preview]',dialog).onclick=()=>dialog.close();
+    if($('[data-open-native]',dialog))$('[data-open-native]',dialog).onclick=()=>window.desktop.openSessionFile(this.uid,file.path).catch(e=>this.error(e));
+    dialog.onclose=()=>dialog.remove();document.body.append(dialog);dialog.showModal();
   }
   async click(e){
     const link=e.target.closest('a');
     if(link){
       const url=new URL(link.href,location.href),match=url.pathname.match(/^\/read\/([a-zA-Z0-9]+)\/(original|chinese)\/(\d+)$/);
+      if(url.origin===location.origin&&/^\/api\/harness\/attachments\/[a-f0-9]{32}$/.test(url.pathname)&&link.hasAttribute('download'))return;
       if(url.origin===location.origin&&match){e.preventDefault();await this.options.openPaper({paper_id:match[1],language:match[2],page:Number(match[3])});return;}
       // Prevent model-generated HTML links from navigating the application itself.
       e.preventDefault();if(['http:','https:'].includes(url.protocol)&&url.origin!==location.origin)window.open(url.href,'_blank','noopener');
+      else if(url.origin===location.origin||url.protocol==='file:'){let path=link.getAttribute('href').replace(/^file:\/\//,'');try{path=decodeURIComponent(path);}catch{}await this.previewFile(path);}
     }
     const b=e.target.closest('button');if(!b)return;
-    if(b.dataset.question){$('textarea',this.root).value=b.dataset.question;$('textarea',this.root).focus();}
+    if(b.dataset.action==='attach')$('[data-file-input]',this.root).click();
+    if(b.dataset.removeFile){const key=this.uid||'new';this.files.set(key,(this.files.get(key)||[]).filter(f=>f.id!==b.dataset.removeFile));this.renderFiles();this.queueDraft();}
+    if(b.dataset.mcp){let content=null;const field=b.closest('[data-mcp-request]').querySelector('[data-mcp-content]');if(field&&b.dataset.mcpAction==='accept')content=JSON.parse(field.value||'{}');await api(`/api/harness/sessions/${this.uid}/respond`,{request_id:b.dataset.mcp,action:b.dataset.mcpAction,content});await this.poll();}
+    if(b.dataset.question){$('.harness-composer textarea',this.root).value=b.dataset.question;$('.harness-composer textarea',this.root).focus();}
     if(b.dataset.action==='new'){await this.switchSession('');if(!this.caps)await this.open();}
     if(b.dataset.action==='legacy'){
       const data=await api(this.options.kind==='paper'?`/api/papers/${this.options.paper_id}/chat`:'/api/global-chat');

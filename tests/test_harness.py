@@ -85,7 +85,9 @@ class HarnessTests(unittest.TestCase):
         self.assertNotIn("PRIVATE_RAW", json.dumps(completed))
         start = next(p for m, p in self.rpc.calls if m == "thread/start")
         self.assertFalse(start["ephemeral"])
-        self.assertEqual(start["sandbox"], "read-only")
+        self.assertNotIn("sandbox", start)
+        self.assertNotIn("approvalPolicy", start)
+        self.assertNotIn("developerInstructions", start)
         turn = next(p for m, p in self.rpc.calls if m == "turn/start")
         self.assertEqual((turn["model"], turn["effort"]), ("test-model", "xhigh"))
         self.assertNotIn("outputSchema", turn)
@@ -97,6 +99,54 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(len(result["turns"]), 2)
         self.assertEqual(sum(m == "thread/start" for m, _ in self.rpc.calls), 1)
         self.assertIn(("thread/resume", unittest.mock.ANY), self.rpc.calls)
+
+    def test_exact_prompt_and_whole_file_and_native_image_inputs(self):
+        import io, attachments
+        from test_articles import PNG
+        file=attachments.receive(io.BytesIO(b'full private file content'), 'manifest.json',25)
+        image=attachments.receive(io.BytesIO(PNG),'figure.png',len(PNG))
+        uid=harness.create({'kind':'paper','paper_id':'p1'})['id']
+        question='  Explain these attachments.\nKeep my exact wording.  '
+        state=self.start(uid,question,attachments=[file['id'],image['id']])
+        turn=next(p for m,p in self.rpc.calls if m=='turn/start')
+        self.assertEqual(turn['input'][0]['text'],question)
+        self.assertTrue(any(i['type']=='localImage' and i['path'].endswith('figure.png') for i in turn['input']))
+        self.assertIn('manifest.json',str(turn['input']))
+        self.assertNotIn('full private file content',str(turn['input']))
+        self.assertEqual(attachments.resolve(file['id'])[1].read_bytes(),b'full private file content')
+        self.assertEqual(state['turns'][0]['attachments'][0]['id'],file['id'])
+
+    def test_resume_restores_native_config_instead_of_paper_persona(self):
+        uid=harness.create({'kind':'paper','paper_id':'p1'})['id']
+        self.start(uid)
+        old=self.rpc.call
+        def call(method,params=None,**kwargs):
+            if method=='config/read': return {'config':{'sandbox_mode':'workspace-write','approval_policy':'on-request','developer_instructions':'Native user customization'}}
+            return old(method,params,**kwargs)
+        with patch.object(self.rpc,'call',side_effect=call):self.start(uid,'Continue')
+        resume=[p for m,p in self.rpc.calls if m=='thread/resume'][-1]
+        self.assertEqual(resume['developerInstructions'],'Native user customization')
+        self.assertEqual(resume['sandbox'],'workspace-write')
+        self.assertEqual(resume['approvalPolicy'],'on-request')
+        self.assertEqual(sum(m=='thread/start' for m,_ in self.rpc.calls),1)
+
+    def test_steering_uses_the_current_native_turn_without_resetting_history(self):
+        uid=harness.create({'kind':'paper','paper_id':'p1'})['id'];self.start(uid)
+        harness.SESSIONS[uid]['status']='running'
+        state=harness.steer(uid,{'question':'Also compare the assumptions. '})
+        method,params=self.rpc.calls[-1]
+        self.assertEqual(method,'turn/steer');self.assertEqual(params['expectedTurnId'],'turn-1')
+        self.assertEqual(params['input'][0]['text'],'Also compare the assumptions. ')
+        self.assertEqual(len(state['turns']),1)
+        self.assertEqual(state['turns'][0]['items'][-1]['type'],'userMessage')
+
+    def test_connector_elicitation_reaches_the_user_instead_of_auto_declining(self):
+        uid=harness.create({'kind':'paper','paper_id':'p1'})['id'];self.start(uid)
+        harness.SESSIONS[uid]['status']='running'
+        harness.server_request(self.rpc,{'id':64,'method':'mcpServer/elicitation/request','params':{'threadId':'native-thread','message':'Choose a source','requestedSchema':{'type':'object'}}})
+        state=harness.snapshot(uid);self.assertFalse(self.rpc.sent)
+        harness.respond(uid,{'request_id':state['requests'][0]['id'],'action':'accept','content':{'source':'public'}})
+        self.assertEqual(self.rpc.sent[-1],{'id':64,'result':{'action':'accept','content':{'source':'public'}}})
 
     def test_command_stream_accepts_native_null_initial_output(self):
         session = harness.create({"kind": "paper", "paper_id": "p1"})

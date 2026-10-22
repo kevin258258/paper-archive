@@ -65,10 +65,17 @@ export class Reader {
       if(e.target.id==='reader-scale')this.viewer.currentScaleValue=e.target.value;
       if(e.target.id==='reader-note')$('#note-content',host).innerHTML=markdown(this.paper.notes.find(n=>n.key===e.target.value)?.text);
     });
+    this.host.addEventListener('pointerdown',e=>{
+      if(!e.target.closest('.reader-side-resizer'))return;e.preventDefault();
+      const handle=e.target;handle.setPointerCapture(e.pointerId);
+      const move=event=>{const width=Math.min(innerWidth*.8,Math.max(330,this.host.getBoundingClientRect().right-event.clientX));this.host.style.setProperty('--reader-chat-width',width+'px');this.viewer?.update?.();};
+      const stop=()=>{handle.removeEventListener('pointermove',move);handle.removeEventListener('pointerup',stop);};
+      handle.addEventListener('pointermove',move);handle.addEventListener('pointerup',stop);
+    });
     this.host.addEventListener('mouseup',()=>this.selection());
-    document.addEventListener('keydown',e=>this.keydown(e));
-    document.addEventListener('visibilitychange',()=>{if(document.hidden&&!this.host.hidden)this.flush();});
-    window.addEventListener('pagehide',()=>this.flush());
+    this.keyHandler=e=>this.keydown(e);document.addEventListener('keydown',this.keyHandler);
+    this.visibilityHandler=()=>{if(document.hidden)this.flush();};document.addEventListener('visibilitychange',this.visibilityHandler);
+    this.hideHandler=()=>this.flush();window.addEventListener('pagehide',this.hideHandler);
   }
   refreshActions(){
     if(!this.paper)return;const q=this.options.isQueued?.(this.paper.id),status=this.options.getSaved(this.paper.id).status||this.paper.human;
@@ -88,7 +95,7 @@ export class Reader {
     this.language=this.saved.language||(p.chinese?'chinese':'original');
     if(!p[this.language])this.language=p.original?'original':'chinese';
     this.host.hidden=false;document.body.style.overflow='hidden';
-    this.host.className='reading-room';
+    this.host.className='reading-room reader-pane';
     this.host.innerHTML=`
       <header class="reading-bar">
         <button data-reader="close" class="reader-back" aria-label="关闭阅读器">←</button>
@@ -110,7 +117,7 @@ export class Reader {
       <div class="reading-layout">
         <aside class="reading-outline" hidden><div class="panel-label">目录</div><div id="outline-content"></div></aside>
         <div class="pdf-stage"><div id="viewer-container" tabindex="0"><div id="pdf-viewer" class="pdfViewer"></div></div><div id="pdf-loading" role="status">载入论文…</div></div>
-        <aside class="reading-notes" hidden>
+        <div class="reader-side-resizer" role="separator" aria-label="调整阅读侧栏宽度"></div><aside class="reading-notes" hidden>
           <nav class="reader-panel-tabs" aria-label="阅读侧栏"><button data-panel-tab="chat">问答</button><button data-panel-tab="annotations">批注 <span id="annotation-count"></span></button><button data-panel-tab="notes">笔记</button><button data-reader="hide-panel" aria-label="关闭阅读侧栏">×</button></nav>
           ${this.chat.shell()}
           <section class="annotation-panel" data-panel="annotations" hidden><div class="annotation-toolbar"><span id="save-status">已保存</span><button data-reader="page-note">＋ 页批注</button></div><div id="highlights"></div></section>
@@ -212,9 +219,14 @@ export class Reader {
     return this.saveChain;
   }
   async close(){
+    if(this.options.onBack)return this.options.onBack();
     try{await this.flush();}catch{return;}
     this.article?.destroy();this.article=null;this.chat.stop();this.generation++;if(this.task)await this.task.destroy();this.task=null;this.pdf=null;this.viewer?.setDocument(null);
     this.host.hidden=true;this.paper=null;this.options.onClose();
+  }
+  async dispose(){
+    await this.flush();clearTimeout(this.saveTimer);this.article?.destroy();this.chat.stop();this.generation++;if(this.task)await this.task.destroy();
+    this.viewer?.setDocument(null);document.removeEventListener('keydown',this.keyHandler);document.removeEventListener('visibilitychange',this.visibilityHandler);window.removeEventListener('pagehide',this.hideHandler);this.host.remove();
   }
   go(page){if(this.article)return this.article.go(page);if(this.pdf)this.viewer.currentPageNumber=Math.max(1,Math.min(this.pdf.numPages,Math.round(page)||1));}
   async jump(language,page){
@@ -312,7 +324,7 @@ export class Reader {
     }
   }
   keydown(e){
-    if(this.host.hidden)return;
+    if(this.host.hidden||this.host.closest('.reading-workspace')?.hidden)return;
     if(document.querySelector('dialog[open]'))return;
     if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='f'){e.preventDefault();$('.find-bar',this.host).hidden=false;$('#pdf-find',this.host).focus();return;}
     if(e.key==='Escape'){

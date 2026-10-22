@@ -8,7 +8,7 @@
     "pdfjs-dist": "6.4.299"
   },
   "name": "paper-archive",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "A local-first paper library, reader and cross-paper research workspace",
   "main": "desktop/main.cjs",
   "license": "AGPL-3.0-only",

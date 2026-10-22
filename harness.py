@@ -9,6 +9,7 @@ from pathlib import Path
 
 import library as lib
 import paper_tools
+import attachments
 import settings
 from codex_rpc import CodexRPC
 
@@ -202,12 +203,15 @@ def start(uid, data):
     language = context.get("language", "original")
     if language not in ("original", "chinese"):
         raise ValueError("无效语言")
+    files = attachments.select(data.get('attachments', []))
+    permissions = data.get('permissions', initial.get('permissions','inherit'))
+    if permissions not in ('inherit','read-only','workspace-write','danger-full-access'): raise ValueError('无效权限模式')
     with LOCK:
         s = _load(uid)
         if s["status"] in BUSY:
-            raise ValueError("当前回答尚未完成，可以先停止")
-        s.update(status="starting", error="", model=model, effort=effort, requests=[], cancel_requested=False)
-        turn = {"id": uuid.uuid4().hex, "native_id": None, "question": question if initial['kind'] == 'intake' else question.strip(),
+            raise ValueError("当前回答尚未完成，可补充消息或先停止")
+        s.update(status="starting", error="", model=model, effort=effort, permissions=permissions, requests=[], cancel_requested=False)
+        turn = {"id": uuid.uuid4().hex, "native_id": None, "question": question, "attachments": files,
                 "context": {"page": page, "language": language, "selection": selection},
                 "items": [], "status": "starting", "model": model, "effort": effort}
         s["turns"].append(turn)
@@ -218,13 +222,30 @@ def start(uid, data):
     return snapshot(uid)
 
 
+def steer(uid, data):
+    question=data.get('question')
+    if not isinstance(question,str) or not question.strip() or len(question)>100000: raise ValueError('请输入有效补充消息')
+    files=attachments.select(data.get('attachments',[]))
+    with LOCK:
+        session=_load(uid)
+        if session['kind'] not in ('paper','library'): raise ValueError('此自动化任务请停止后再发送消息')
+        if session['status'] not in BUSY or not session['turns'][-1].get('native_id'): raise ValueError('当前没有可补充的回答，请正常发送')
+        native_id=session['turns'][-1]['native_id'];thread=session['thread_id']
+    connect().call('turn/steer', {'threadId':thread, 'expectedTurnId':native_id,
+                                'input':[{'type':'text','text':question}]+attachments.inputs(files)})
+    with LOCK:
+        session=_load(uid)
+        session['turns'][-1]['items'].append({'id':uuid.uuid4().hex,'type':'userMessage','text':question,'attachments':files})
+        _save(session)
+    return snapshot(uid)
+
+
 def _start(uid):
     try:
         rpc = connect()
         with LOCK:
             s = copy.deepcopy(_load(uid))
-        common = {"cwd": str(lib.ROOT), "model": s["model"], "sandbox": "read-only",
-                  "approvalPolicy": "on-request", "approvalsReviewer": "user"}
+        common = {"cwd": str(lib.ROOT), "model": s["model"]}
         importing = s['kind'] == 'import'
         scanning = s['kind'] == 'domain'
         collecting = s['kind'] == 'intake'
@@ -239,19 +260,37 @@ def _start(uid):
                 import blog_import
                 agent_import = blog_import
                 agent_import_tools = blog_import
-            common['sandbox'] = 'workspace-write'
+            common.update(sandbox='workspace-write', approvalPolicy='on-request', approvalsReviewer='user')
+        interactive = s['kind'] in ('paper','library')
+        if interactive:
+            permission = s.get('permissions','inherit')
+            if permission!='inherit': common['sandbox']=permission
+        else:
+            common.setdefault('sandbox','read-only')
+            common.setdefault('approvalPolicy','on-request')
+            common.setdefault('approvalsReviewer','user')
         if not s["thread_id"]:
-            result = rpc.call("thread/start", {**common, "ephemeral": False,
-                              "developerInstructions": intake.INSTRUCTIONS if collecting else agent_import.INSTRUCTIONS if importing else domain_scan.INSTRUCTIONS if scanning else paper_tools.INSTRUCTIONS,
-                              "dynamicTools": intake.TOOLS if collecting else agent_import_tools.TOOLS if importing else domain_scan.TOOLS if scanning else paper_tools.TOOLS})
+            options = {**common, "ephemeral": False, "dynamicTools": intake.TOOLS if collecting else agent_import_tools.TOOLS if importing else domain_scan.TOOLS if scanning else paper_tools.TOOLS}
+            if not interactive:
+                options['developerInstructions'] = intake.INSTRUCTIONS if collecting else agent_import.INSTRUCTIONS if importing else domain_scan.INSTRUCTIONS
+            # Ordinary conversations inherit local Codex's native instructions,
+            # tools, plugins and permissions. No paper persona or answer wrapper.
+            result = rpc.call("thread/start", options)
             with LOCK:
                 _load(uid)["thread_id"] = result["thread"]["id"]
                 _save(_load(uid))
             s["thread_id"] = result["thread"]["id"]
             LOADED.add(s["thread_id"])
-        elif s["thread_id"] not in LOADED:
-            # Resume is mandatory. An unavailable thread must never silently become a new one.
-            rpc.call("thread/resume", {**common, "threadId": s["thread_id"]})
+        elif s["thread_id"] not in LOADED or interactive:
+            resume = {**common, "threadId": s["thread_id"]}
+            if interactive:
+                config = rpc.call('config/read', {'includeLayers':False,'cwd':str(lib.ROOT)}).get('config',{})
+                resume['developerInstructions'] = config.get('developer_instructions') or ''
+                if s.get('permissions','inherit')=='inherit' and config.get('sandbox_mode'):
+                    resume['sandbox']=config['sandbox_mode']
+                if config.get('approval_policy'): resume['approvalPolicy']=config['approval_policy']
+                if config.get('approvals_reviewer'): resume['approvalsReviewer']=config['approvals_reviewer']
+            rpc.call("thread/resume", resume)
             LOADED.add(s["thread_id"])
         with LOCK:
             current = _load(uid)
@@ -277,7 +316,7 @@ def _start(uid):
             context.update(arxiv=s['arxiv'], vault=str(lib.ROOT), import_job=s.get('job_id'))
         # Context is supplied independently of the displayed question, without injecting
         # extracted snippets, shortened answers or a structured-output schema.
-        inputs = [{"type": "text", "text": turn["question"]}]
+        inputs = [{"type": "text", "text": turn["question"]}] + attachments.inputs(turn.get("attachments",[]))
         if importing:
             inputs.append({'type': 'skill', 'name': 'blog-translate' if s.get('source_type') == 'blog' else 'arxiv-translate', 'path': s['skill_path']})
         if collecting:
@@ -285,7 +324,7 @@ def _start(uid):
         result = rpc.call("turn/start", {"threadId": s["thread_id"], "input": inputs,
                           "additionalContext": {"paper_archive": {
                               "kind": "untrusted", "value": json.dumps(context, ensure_ascii=False)}},
-                          "model": s["model"], "effort": s["effort"], "summary": "auto"})
+                          "model": s["model"], "effort": s["effort"]})
         native_id = result["turn"]["id"]
         with LOCK:
             current = _load(uid)
@@ -314,11 +353,9 @@ def safe_item(item):
     keys = ("id", "type", "text", "phase", "summary", "command", "status", "tool",
             "server", "arguments", "aggregatedOutput", "exitCode", "changes", "plan")
     result = {k: item[k] for k in keys if k in item}
-    if "aggregatedOutput" in result and result["aggregatedOutput"]:
-        result["aggregatedOutput"] = result["aggregatedOutput"][-30000:]
-    if item.get('tool') in ('archive_compile_translation', 'archive_check_translation', 'archive_finish_import', 'archive_domain_record', 'archive_domain_finish'):
+    if item.get('contentItems'):
         result['outputText'] = '\n'.join(c.get('text', '') for c in (item.get('contentItems') or [])
-                                       if c.get('type') == 'inputText')[-20000:]
+                                       if c.get('type') == 'inputText')
     return result
 
 
@@ -362,8 +399,6 @@ def notification(method, params):
                 item = {"id": ident, "type": kind}
                 turn["items"].append(item)
             item[field] = (item.get(field) or "") + (params.get("delta") or "")
-            if field == "aggregatedOutput":
-                item[field] = item[field][-30000:]
         elif method == "thread/tokenUsage/updated":
             s["usage"] = params.get("tokenUsage")
         elif method == "error":
@@ -410,7 +445,7 @@ def server_request(rpc, message):
         rpc.send({"id": rpc_id, "result": result})
         return
     supported = ("item/commandExecution/requestApproval", "item/fileChange/requestApproval",
-                 "item/permissions/requestApproval", "item/tool/requestUserInput", "tool/requestUserInput")
+                 "item/permissions/requestApproval", "item/tool/requestUserInput", "tool/requestUserInput", "mcpServer/elicitation/request")
     if s and method in supported:
         request_id = uuid.uuid4().hex
         with LOCK:
@@ -443,7 +478,13 @@ def respond(uid, data):
         if not entry or entry[3] != uid or not request:
             raise ValueError("这个请求已结束")
         rpc, rpc_id, method, _ = entry
-        if method.endswith("requestUserInput"):
+        if method == 'mcpServer/elicitation/request':
+            action=data.get('action')
+            if action not in ('accept','decline','cancel'): raise ValueError('无效连接器回复')
+            content=data.get('content')
+            if content is not None and not isinstance(content,dict): raise ValueError('连接器回复必须为对象')
+            result={'action':action,'content':content}
+        elif method.endswith("requestUserInput"):
             answers = data.get("answers")
             if not isinstance(answers, dict):
                 raise ValueError("请填写回答")

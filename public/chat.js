@@ -15,7 +15,7 @@ export class PaperChat {
     this.client=new HarnessChat($('#paper-harness',this.reader.host),{
       kind:'paper',paper_id:paper.id,title:paper.title,sourceType:paper.sourceType,
       context:()=>({page:this.reader.viewer?.currentPageNumber||1,language:this.reader.language}),
-      openPaper:async c=>{if(c.paper_id===paper.id)await this.reader.jump(c.language,c.page);else throw Error('引用不属于当前论文');},
+      openPaper:async c=>{if(c.paper_id===paper.id)await this.reader.jump(c.language,c.page);else if(this.reader.options.openPaper)await this.reader.options.openPaper(c);else throw Error('引用不属于当前论文');},
     });
     this.client.open();
   }

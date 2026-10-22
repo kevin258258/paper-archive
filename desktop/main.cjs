@@ -80,6 +80,11 @@ app.whenReady().then(async()=>{
     else if(fs.existsSync(file))fs.unlinkSync(file);
     backend.stdin.write(JSON.stringify({api_key:apiKey})+'\n');return {persisted};
   });
+  ipcMain.handle('archive:open-session-file',async(event,data)=>{
+    validSender(event);if(!data||!/^[a-f0-9]+$/.test(data.id)||typeof data.path!=='string')throw Error('无效文件');
+    const response=await fetch(origin+'/api/harness/sessions/'+data.id+'/file-location?path='+encodeURIComponent(data.path),{headers:{'X-Desktop-Token':desktopToken}});
+    if(!response.ok)throw Error('文件不在当前资料工作区中或不存在');const file=await response.json();const error=await shell.openPath(file.path);if(error)throw Error(error);
+  });
   ipcMain.handle('archive:choose-vault',async event=>{validSender(event);const rows=await fetch(origin+'/api/jobs',{headers:{'X-Desktop-Token':desktopToken}}).then(r=>r.json());const activity=await fetch(origin+'/api/harness/activity',{headers:{'X-Desktop-Token':desktopToken}}).then(r=>r.json());const response=activity.active||rows.some(r=>r.status==='running'||r.status==='queued');if(response)throw Error('请先等待或取消正在运行的任务');if(await selectVault()){app.relaunch();app.quit();}});
   await startBackend();await openWindow();
 }).catch(error=>{dialog.showErrorBox('无法启动 Paper Archive',String(error.message));app.quit();});

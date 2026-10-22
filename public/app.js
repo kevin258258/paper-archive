@@ -1,5 +1,6 @@
 import {api,setToken,esc,$,toast} from './api.js';
-import {Reader,markdown} from './reader.js';
+import {markdown} from './reader.js';
+import {ReaderTabs} from './reader-tabs.js';
 import {Collections} from './collections.js';
 import {Workspace} from './workspace.js';
 import {HarnessChat} from './harness-chat.js';
@@ -25,7 +26,8 @@ const collections=new Collections(async()=>{
 function renderCollectionNav(){
   $('#collection-nav').innerHTML=collections.active.map(c=>`<button class="collection-nav-item ${state.collection===c.id?'active':''}" data-collection="${c.id}"><span class="collection-symbol">◌</span><span>${esc(c.name)}</span><span class="mono">${String(c.papers.length).padStart(2,'0')}</span></button>`).join('')||'<button class="create-collection-hint" data-manage-collections>新建收藏集 ↗</button>';
 }
-const reader=new Reader($('#reader'),{
+const reader=new ReaderTabs($('#reader'),{
+  findPaper:byId,
   getSaved:id=>saved(id),
   collect:p=>collections.open(p),
   save:async(id,patch)=>{reading[id]=await api('/api/reading/'+id,patch);if($('#reader').hidden)render();else renderCounts();},
@@ -265,7 +267,7 @@ $('#refresh').onclick=async()=>{try{$('#refresh').disabled=true;const r=await ap
 document.addEventListener('keydown',e=>{if(!$('#reader').hidden||document.querySelector('dialog[open]'))return;if(e.key==='Escape'&&drawerMode){closeDrawer();return;}if(e.key==='/'&&!e.target.closest('input,textarea,select')){e.preventDefault();$('#search').focus();}});
 document.addEventListener('paste',e=>{if(e.target.closest('input,textarea,[contenteditable]')||!$('#reader').hidden)return;const value=e.clipboardData.getData('text').trim();if(/^https?:\/\//i.test(value)){e.preventDefault();openImport(value);}});
 async function init(){
-  const boot=await api('/api/bootstrap');setToken(boot.token);window.paperProvider=boot.settings.provider==='codex'?'Codex':boot.settings.model;reading=boot.reading;await collections.load();await loadLibrary();
+  const boot=await api('/api/bootstrap');setToken(boot.token);window.paperProvider=boot.settings.provider==='codex'?'Codex':boot.settings.model;reading=boot.reading;await collections.load();await loadLibrary();await reader.restore(papers);
   jobs=await api('/api/jobs');for(const j of jobs)if(['completed','failed','cancelled','interrupted'].includes(j.status))doneJobs.add(j.id);
   renderJobs();setInterval(pollJobs,2500);
 }
