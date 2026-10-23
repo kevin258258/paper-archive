@@ -3,6 +3,8 @@ const {spawn}=require('node:child_process');
 const fs=require('node:fs');
 const path=require('node:path');
 const crypto=require('node:crypto');
+const {ArticleViews,translationCSS}=require('./article-view.cjs');
+let articleViews;
 let window, backend, origin='', desktopToken='', config={}, shuttingDown=false, apiKey='';
 const root=path.join(__dirname,'..');
 app.setPath('userData',path.join(app.getPath('appData'),'paper-archive'));
@@ -19,7 +21,7 @@ async function readKey(){
   if(!fs.existsSync(file)||!await keyAvailable())return '';
   try{const raw=fs.readFileSync(file);return safeStorage.decryptStringAsync?(await safeStorage.decryptStringAsync(raw)).result:safeStorage.decryptString(raw);}catch{return '';}
 }
-function validSender(event){if(!event.senderFrame||new URL(event.senderFrame.url).origin!==origin)throw Error('Untrusted sender');}
+function validSender(event){if(event.sender!==window?.webContents||event.senderFrame!==window.webContents.mainFrame||new URL(event.senderFrame.url).origin!==origin)throw Error('Untrusted sender');}
 async function selectVault(){
   const result=await dialog.showOpenDialog(window,{title:'选择论文资料目录',defaultPath:config.vault||app.getPath('documents'),properties:['openDirectory','createDirectory']});
   if(result.canceled)return false;config.vault=result.filePaths[0];saveConfig();return true;
@@ -61,6 +63,10 @@ async function openWindow(){
     return {action:'deny'};
   });
   window.webContents.on('will-navigate',(event,url)=>{if(new URL(url).origin!==origin){event.preventDefault();if(/^https?:\/\//.test(url))shell.openExternal(url);}});
+  articleViews=new ArticleViews({window,katexCSS:translationCSS(app.isPackaged?path.join(process.resourcesPath,'backend','_internal'):root),context:async id=>{
+    const response=await fetch(origin+'/api/articles/'+id+'/web-context',{headers:{'X-Desktop-Token':desktopToken}});
+    if(!response.ok)throw Error('无法读取网页资料');return response.json();
+  }});
   window.once('ready-to-show',()=>window.show());
   await window.loadURL(origin);
   console.log("Paper Archive window loaded");
@@ -73,6 +79,7 @@ app.whenReady().then(async()=>{
   if(process.env.PAPER_VAULT_ROOT){config.vault=path.resolve(process.env.PAPER_VAULT_ROOT);saveConfig();}
   if(!config.vault||!fs.existsSync(config.vault)){if(!await selectVault()){app.quit();return;}}
   apiKey=await readKey();
+  ipcMain.handle('archive:article',(event,data)=>{validSender(event);return articleViews.command(data);});
   ipcMain.handle('archive:set-key',async(event,key)=>{
     validSender(event);if(typeof key!=='string'||key.length>10000||!key.trim())throw Error('无效密钥');
     apiKey=key.trim();let persisted=false;const file=path.join(userData(),'api-key.enc');

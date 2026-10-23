@@ -389,6 +389,14 @@ def document(paper):
     return {**{k: value[k] for k in ('title', 'chinese_title', 'authors', 'site', 'published', 'saved', 'source_url', 'blocks', 'warnings')}, 'completed': value.get('completed', False)}
 
 
+def web_context(paper):
+    """Desktop-only location; raw source HTML is never served in the app origin."""
+    path = Path(paper['files']['article'])
+    value = json.loads(path.read_text())
+    return {'source_url': normalize_url(value['source_url']),
+            'snapshot_path': str(path.parent / 'webpage.mhtml')}
+
+
 def page_text(paper, language, page):
     blocks = document(paper)['blocks']
     if language not in ('original', 'chinese') or type(page) is not int or not 1 <= page <= len(blocks):

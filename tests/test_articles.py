@@ -54,6 +54,15 @@ class ArticleTests(unittest.TestCase):
         self.translate()
         return articles.finish(URL, {'chinese_title': '理解特征', 'domain_id': self.domain['id'], 'reason': '全文讨论内部特征'})
 
+    def test_native_web_context_keeps_snapshot_beside_article_without_exposing_paths_in_document(self):
+        receipt = self.archive()
+        paper = lib.paper(receipt['paper_id'])
+        context = articles.web_context(paper)
+        self.assertEqual(context['source_url'], normalize_url(URL))
+        self.assertEqual(Path(context['snapshot_path']), Path(paper['files']['article']).parent / 'webpage.mhtml')
+        self.assertNotIn('snapshot_path', articles.document(paper))
+        self.assertFalse(Path(context['snapshot_path']).exists())
+
     def test_extract_original_figures_math_code_links_and_remove_site_chrome(self):
         value, folder = articles.prepare(URL)
         full = '\n'.join(b['original'] for b in value['blocks'])

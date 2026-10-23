@@ -61,20 +61,20 @@ export class ReaderTabs {
   async activate(uid){
     const tab=this.tabs.find(t=>t.id===uid);if(!tab)return;
     if(this.current&&this.active!==uid)await this.current.flush();
-    for(const item of this.tabs)if(item.reader)item.reader.host.hidden=true;
+    for(const item of this.tabs)if(item.reader){item.reader.article?.visibility(false);item.reader.host.hidden=true;}
     this.active=uid;this.host.hidden=false;$('.app').inert=true;document.body.style.overflow='hidden';
     if(!tab.reader){
       const pane=document.createElement('section');pane.className='reader-pane';pane.hidden=true;$('.reading-tab-panes',this.host).append(pane);
       tab.reader=new Reader(pane,{...this.options,onBack:()=>this.close(),openPaper:async c=>{const paper=this.options.findPaper(c.paper_id);if(!paper)throw Error('引用文献不在库中');await this.open(paper);await this.jump(c.language,c.page);}});
       try{await tab.reader.open(tab.paper);}catch(error){await tab.reader.dispose();tab.reader=null;this.tabs=this.tabs.filter(t=>t!==tab);this.render();if(!this.tabs.length)await this.close();throw error;}
     }
-    tab.reader.host.hidden=false;tab.reader.viewer?.update?.();
+    tab.reader.host.hidden=false;tab.reader.article?.visibility(true);tab.reader.viewer?.update?.();
     if(['auto','page-width','page-fit'].includes(tab.reader.viewer?.currentScaleValue))tab.reader.viewer.currentScaleValue=tab.reader.viewer.currentScaleValue;
     tab.reader.chat.pageChanged();this.render();this.persist();
   }
   async close(){
     if(this.current)await this.current.flush();
-    for(const tab of this.tabs)if(tab.reader)tab.reader.host.hidden=true;
+    for(const tab of this.tabs)if(tab.reader){tab.reader.article?.visibility(false);tab.reader.host.hidden=true;}
     this.host.hidden=true;this.render();this.options.onClose();this.persist();
   }
   async closeTab(uid){

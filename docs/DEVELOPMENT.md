@@ -1,6 +1,6 @@
 # Architecture and validation
 
-The Electron main process owns the desktop window, directory chooser, encrypted key storage and backend lifecycle. The isolated renderer receives two narrow IPC methods. A Python backend owns SQLite, file access, arXiv ingestion and AI transports. All assets needed for the reader are served locally.
+The Electron main process owns the desktop window, directory chooser, encrypted key storage and backend lifecycle. The isolated renderer receives narrow, sender-checked IPC methods. Remote Blog pages use a separate sandboxed WebContentsView without preload or Node access. A Python backend owns SQLite, file access, arXiv ingestion and AI transports. All assets needed for the reader are served locally.
 
 - `library.py`: file indexing, PDF evidence and reading-state patches.
 - `collections_store.py`: many-to-many collections with reversible archive/restore.
@@ -63,3 +63,11 @@ The 0.5 suite passes 70 tests. Queue cases verify one-time migration without re-
 - A Codex executable must be discoverable in PATH/common CLI directories or selected in Settings. The app uses the user's existing login and does not distribute or copy it.
 - SQLite and the taxonomy belong to a single local vault. Concurrent independent application instances pointed at the same vault are not a supported sync strategy.
 - Linux is the initially tested desktop platform. Cross-platform configuration is not a substitute for platform testing or signing.
+
+## Original-site Blog reader (0.9)
+
+`desktop/article-view.cjs` owns a remote view per open Blog tab, with a separate nonpersistent session and no desktop-token injection. Its commands accept an indexed article ID, never an arbitrary file path or JavaScript. The authenticated, desktop-only web-context endpoint provides the original public URL and fixed snapshot destination. Public request checks include all DNS answers; local files, internal hosts, permissions, downloads and popups are denied. A remote page cannot call the app IPC or read its backend capability. The primary app CSP is unchanged.
+
+`desktop/article-overlay.cjs` runs in an isolated world. It aligns normalized source text to DOM blocks, inserts reviewed Chinese HTML beside original elements, and toggles presentation without rebuilding the source page. Figures and controls stay mounted; dynamic content is observed, and unmatched text stays original with a coverage count. No new model call is required to switch presentation. `public/article-web.js` bounds the native view to the active reader, hides it behind app dialogs/menus or inactive tabs, and connects selections, highlights, search, position and sidebar controls. The original MHTML is saved before translation injection; manual refresh temporarily removes the overlay and restores it afterwards. Offline snapshots are explicitly labelled static.
+
+Run `electron scripts/test_article_view.cjs` on a machine with a display (or under Xvfb in CI) for renderer regression checks: original chart handlers, slider changes, three language modes, dynamic paragraphs, conservative matching, search, teardown, and private URL/DNS rejection. These run in an offscreen window against synthetic data, without the user's library. The Python suite also checks snapshot placement and excludes local snapshot paths from the normal article document.

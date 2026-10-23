@@ -117,6 +117,10 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/reader-workspace':
                 import reader_workspace
                 return self.json(reader_workspace.read())
+            m = re.fullmatch(r'/api/articles/([a-f0-9]{20})/web-context', path)
+            if m and DESKTOP_TOKEN:
+                import articles
+                return self.json(articles.web_context(lib.paper(m[1])))
             m = re.fullmatch(r'/api/articles/([a-f0-9]{20})', path)
             if m:
                 import articles

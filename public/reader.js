@@ -274,7 +274,7 @@ export class Reader {
     if(action==='chat'||action==='annotations')this.switchPanel(action);
     if(action==='hide-panel')this.switchPanel('chat',false);
     if(action==='page-note')this.addAnnotation({text:'',language:this.language,page:this.viewer.currentPageNumber,rects:[]});
-    if(action==='ask-selection'&&this.pendingSelection){this.switchPanel('chat');this.chat.setSelection(this.pendingSelection);$('#selection-action',this.host).hidden=true;window.getSelection()?.removeAllRanges();}
+    if(action==='ask-selection'&&this.pendingSelection){this.switchPanel('chat');this.chat.setSelection(this.pendingSelection);$('#selection-action',this.host).hidden=true;window.getSelection()?.removeAllRanges();this.article?.web?.clearSelection();}
     if(action==='chinese'||action==='original'){if(action===this.language&&!this.article)return;await this.flush();this.language=action;return this.load();}
     if(action==='next')this.go(this.viewer.currentPageNumber+1);
     if(action==='prev')this.go(this.viewer.currentPageNumber-1);
@@ -286,11 +286,11 @@ export class Reader {
       requestAnimationFrame(()=>{if(['auto','page-width','page-fit'].includes(this.viewer.currentScaleValue))this.viewer.currentScaleValue=this.viewer.currentScaleValue;});
     }
     if(action==='find'){const bar=$('.find-bar',this.host);bar.hidden=!bar.hidden;if(!bar.hidden)$('#pdf-find',this.host).focus();}
-    if(action==='find-close'){$('.find-bar',this.host).hidden=true;this.bus.dispatch('findbarclose',{source:this});}
+    if(action==='find-close'){$('.find-bar',this.host).hidden=true;this.bus?.dispatch('findbarclose',{source:this});}
     if(action==='find-next')this.find(true);
     if(action==='find-prev')this.find(true,true);
     if(action==='highlight'&&this.pendingSelection){
-      this.addAnnotation(this.pendingSelection);
+      this.addAnnotation(this.pendingSelection);this.article?.web?.clearSelection();
     }
   }
   selection(){

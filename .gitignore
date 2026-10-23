@@ -19,3 +19,4 @@ previews/
 *.AppImage
 *.spec
 release/
+*.mhtml

@@ -1,14 +1,21 @@
 import {api,$,esc} from './api.js';
+import {WebArticle} from './article-web.js';
 
 // Article block numbers use the same durable position/citation seam as PDF pages.
 export class ArticleView {
   constructor(reader,renderMarkdown){this.r=reader;this.markdown=renderMarkdown;this.current=1;this.mode='single';}
   async mount(){
     const r=this.r;
+    this.presentation=r.saved.positions[r.language]?.articleView||(globalThis.desktop?.article?'web':'reader');
     this.document=await api('/api/articles/'+r.paper.id);
     if(r.paper.chinese){
       const button=document.createElement('button');button.dataset.reader='bilingual';button.textContent='对照';
       $('.reading-languages',r.host).append(button);
+    }
+    if(globalThis.desktop?.article){
+      const views=document.createElement('div');views.className='article-view-switch';views.innerHTML='<button data-article-view=web>网页</button><button data-article-view=reader>整理版</button>';
+      $('.reading-tools .tool-group',r.host).append(views);
+      views.addEventListener('click',e=>{const button=e.target.closest('[data-article-view]');if(button)this.setPresentation(button.dataset.articleView).catch(console.error);});
     }
     r.host.classList.add('article-room');
     $('.zoom-tools',r.host).hidden=true;
@@ -48,19 +55,32 @@ export class ArticleView {
     const source=$('#pdf-file',r.host);source.href=doc.source_url;source.setAttribute('aria-label','打开原文网站');source.title='原文网站';
     for(const lang of ['chinese','original'])$(`[data-reader=${lang}]`,r.host)?.classList.toggle('active',this.mode==='single'&&language===lang);
     $('[data-reader=bilingual]',r.host)?.classList.toggle('active',this.mode==='bilingual');
+    r.host.querySelectorAll('[data-article-view]').forEach(b=>b.classList.toggle('active',b.dataset.articleView===this.presentation));
+    if(this.presentation==='web'&&globalThis.desktop?.article){
+      if(!this.web)this.web=new WebArticle(this);
+      await this.web.load(position);this.current=position;r.viewer.currentPageNumber=position;this.update();return;
+    }
+    this.web?.destroy();this.web=null;
     this.scroll.innerHTML=`<article class="article-document ${this.mode==='bilingual'?'article-parallel':''}"><header class="article-heading"><span class="article-source mono">BLOG · ${esc(doc.site)}</span><h1>${esc(language==='chinese'?doc.chinese_title:doc.title)}</h1><p>${esc(doc.authors.join(' · '))}${doc.published?' · '+esc(doc.published.slice(0,10)):''}</p><a href="${esc(doc.source_url)}" target="_blank" rel="noopener">原文 ↗</a>${doc.completed===false?'<p class="article-status">图文已修复 · 译文复核中</p>':''}${doc.warnings.length?'<details class="article-warnings"><summary>离线保存说明</summary>'+doc.warnings.map(w=>`<p>${esc(w)}</p>`).join('')+'</details>':''}</header><div class="article-body">${doc.blocks.map(b=>`<section class="article-block" data-block="${b.index}" id="block-${b.index}"><a class="block-number mono" href="#block-${b.index}" aria-label="第 ${b.index} 段">${String(b.index).padStart(2,'0')}</a>${(this.mode==='bilingual'?['original','chinese']:[language]).map(lang=>`<div class="article-prose markdown" data-block-language="${lang}">${!b[lang]?'<span class="article-pending">待翻译 · 原文</span>':''}${this.markdown(b[lang]||b.original,true)}</div>`).join('')}</section>`).join('')}</div><footer class="article-end mono">END · ${doc.blocks.length} 段</footer></article>`;
     // Stable heading anchors for the original page's in-document references.
     this.scroll.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach(h=>{h.id=h.textContent.trim().toLowerCase().replace(/[^\p{L}\p{N}\s-]/gu,'').replace(/\s+/g,'-');});
     this.go(position);
     r.queueSave({language});this.paint();
   }
+  async setPresentation(view){
+    if(!['web','reader'].includes(view)||view===this.presentation)return;
+    this.presentation=view;await this.load(this.current);this.update();
+  }
+  visibility(value){this.web?.setVisible(value);}
   go(page){
     const r=this.r,n=Math.max(1,Math.min(this.document.blocks.length,Math.round(page)||1));
     this.current=n;r.viewer.currentPageNumber=n;$('#reader-page',r.host).value=n;
+    if(this.web){this.web.go(n);this.update();return;}
     if(n===1)this.scroll.scrollTop=0;else this.scroll.querySelector(`[data-block="${n}"]`)?.scrollIntoView({block:'start'});
     this.update();
   }
   track(){
+    if(this.web)return;
     const top=this.scroll.getBoundingClientRect().top+90;
     let n=1;
     for(const block of this.scroll.querySelectorAll('[data-block]')){if(block.getBoundingClientRect().top>top)break;n=Number(block.dataset.block);}
@@ -68,11 +88,12 @@ export class ArticleView {
   }
   update(){
     const r=this.r;
-    r.saved.positions[r.language]={page:this.current};
+    r.saved.positions[r.language]={page:this.current,articleView:this.presentation};
     r.queueSave({positions:structuredClone(r.saved.positions),language:r.language});
     $('#reading-progress-fill',r.host).style.width=100*this.current/this.document.blocks.length+'%';r.chat.pageChanged();
   }
   selection(){
+    if(this.web)return;
     const r=this.r,selection=window.getSelection(),action=$('#selection-action',r.host);
     if(!selection?.rangeCount||selection.isCollapsed){action.hidden=true;return;}
     const range=selection.getRangeAt(0),start=range.startContainer.parentElement?.closest('[data-block-language]'),end=range.endContainer.parentElement?.closest('[data-block-language]');
@@ -92,17 +113,19 @@ export class ArticleView {
     return ranges;
   }
   paint(){
+    if(this.web){this.web.paint();return;}
     if(!globalThis.CSS?.highlights||!globalThis.Highlight)return;
     const ranges=[];
     for(const h of this.r.saved.highlights){const el=this.scroll.querySelector(`[data-block="${h.page}"] [data-block-language="${h.language}"]`);if(el&&h.text)ranges.push(...this.ranges(el,h.text));}
     CSS.highlights.set('article-annotations',new Highlight(...ranges));
   }
   find(again,previous){
+    if(this.web){this.web.find(again,previous);return;}
     const query=$('#pdf-find',this.r.host).value;
     if(!again||this.query!==query){this.query=query;this.matches=[];for(const el of this.scroll.querySelectorAll('.article-prose'))for(const range of this.ranges(el,query))this.matches.push({range,page:Number(el.closest('[data-block]').dataset.block)});this.match=-1;}
     if(this.matches.length){this.match=(this.match+(previous?-1:1)+this.matches.length)%this.matches.length;this.go(this.matches[this.match].page);}
     if(globalThis.CSS?.highlights&&globalThis.Highlight)CSS.highlights.set('article-find',new Highlight(...this.matches.map(m=>m.range)));
     $('#find-count',this.r.host).textContent=this.matches.length?`${this.match+1} / ${this.matches.length}`:'0 / 0';
   }
-  destroy(){cancelAnimationFrame(this.frame);globalThis.CSS?.highlights?.delete('article-annotations');globalThis.CSS?.highlights?.delete('article-find');}
+  destroy(){this.web?.destroy();cancelAnimationFrame(this.frame);globalThis.CSS?.highlights?.delete('article-annotations');globalThis.CSS?.highlights?.delete('article-find');}
 }

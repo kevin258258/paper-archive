@@ -18,5 +18,6 @@ jobs:
       - run: npm ci
       - run: python scripts/test.py
       - run: |
-          node --check desktop/main.cjs
+          for file in desktop/*.cjs; do node --check "$file"; done
           for file in public/*.js; do node --check "$file"; done
+      - run: xvfb-run -a node_modules/.bin/electron --disable-gpu scripts/test_article_view.cjs
