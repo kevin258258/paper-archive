@@ -90,13 +90,22 @@ function installArticleOverlay(payload){
     if(matches.length){match=(match+(previous?-1:1)+matches.length)%matches.length;const hit=matches[match];hit.range.startContainer.parentElement.scrollIntoView({block:'center'});}
     CSS.highlights?.set('pa-search',new Highlight(...matches.map(m=>m.range)));return {current:matches.length?match+1:0,total:matches.length};
   }
+  const anchorClick=event=>{
+    const link=event.target.closest?.('a[href]');if(!link||config.mode!=='chinese')return;
+    let url,current;try{url=new URL(link.href,location.href);current=new URL(location.href);}catch{return;}
+    if(url.origin!==current.origin||url.pathname!==current.pathname||url.search!==current.search||!url.hash)return;
+    let target;try{target=document.getElementById(decodeURIComponent(url.hash.slice(1)));}catch{return;}
+    const record=[...records.values()].find(r=>r.el===target||r.el.contains(target));
+    if(record?.translation&&record.canHide){event.preventDefault();requestAnimationFrame(()=>record.translation?.scrollIntoView({block:'start'}));}
+  };
+  document.addEventListener('click',anchorClick,true);
   observer=new MutationObserver(changes=>{
     if(changes.every(c=>c.target.parentElement?.closest('.pa-translation')||c.target.closest?.('.pa-translation')||c.type==='childList'&&c.addedNodes.length+c.removedNodes.length>0&&[...c.addedNodes,...c.removedNodes].every(n=>n.nodeType===1&&n.classList.contains('pa-translation'))))return;
     clearTimeout(timer);timer=setTimeout(scan,500);
   });
   const api={state,go,find,paint,reset:restore,clearSelection:()=>getSelection()?.removeAllRanges(),
     configure(next){const changed=next.blocks!==undefined&&JSON.stringify(config.blocks)!==JSON.stringify(next.blocks);config={...config,...next};if(changed||!records.size){restore();scan();}else{applyMode();paint(config.highlights||[]);}return state();},
-    destroy(){destroyed=true;clearTimeout(timer);observer.disconnect();restore();style.remove();CSS.highlights?.delete('pa-annotations');CSS.highlights?.delete('pa-search');delete globalThis.__paperArchiveArticle;}};
+    destroy(){destroyed=true;document.removeEventListener('click',anchorClick,true);clearTimeout(timer);observer.disconnect();restore();style.remove();CSS.highlights?.delete('pa-annotations');CSS.highlights?.delete('pa-search');delete globalThis.__paperArchiveArticle;}};
   globalThis.__paperArchiveArticle=api;scan();return state();
 }
 module.exports={installArticleOverlay};
