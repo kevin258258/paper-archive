@@ -86,23 +86,31 @@ class BatchImportTests(unittest.TestCase):
 
     def test_real_import_dispatch_runs_distinct_sources_concurrently(self):
         import blog_import
-        entered, release = threading.Barrier(26), threading.Event()
-        def work(*args):
-            entered.wait(timeout=3)
-            release.wait(timeout=4)
+        entered, release, lock = threading.Event(), threading.Event(), threading.Lock()
+        started = set()
+        def work(uid, source):
+            with lock:
+                started.add(uid)
+                if len(started) == 25:
+                    entered.set()
+            # The main thread must durably create all 25 SQLite jobs before it
+            # can release them. A 3-second worker barrier races slow CI disks.
+            if not release.wait(timeout=30):
+                raise RuntimeError('test did not release concurrent imports')
             return {'paper_id': 'synthetic'}
         with patch.object(blog_import, 'run', side_effect=work), patch.object(jobs, 'existing_result', return_value=None), patch('agent_import.run', side_effect=work), patch('settings.read', return_value={'import_mode':'codex'}), patch.object(lib, 'refresh'), patch.object(lib, 'find_arxiv', return_value=None):
             batch=[jobs.create('blog', 'https://research.example.org/'+str(i)) for i in range(24)]
             batch.append(jobs.create('import', '2501.10009'))
             try:
-                entered.wait(timeout=3)
+                self.assertTrue(entered.wait(timeout=15), 'All 25 imports must enter before any finishes')
                 self.assertEqual([jobs.get(j['id'])['status'] for j in batch], ['running']*25)
             finally:
                 release.set()
-                # Both must leave their workers before the temporary database closes.
+                # Every worker must leave before the temporary database closes.
                 import time
-                deadline=time.monotonic()+5
+                deadline=time.monotonic()+15
                 while time.monotonic()<deadline and any(jobs.get(j['id'])['status'] in ('queued','running') for j in batch): time.sleep(.01)
+                self.assertTrue(all(jobs.get(j['id'])['status']=='completed' for j in batch))
 
     def test_archived_papers_open_without_waiting_for_import_queue(self):
         result = {'paper_id': 'existing', 'duplicate': True, 'message': '已在库中，直接打开'}

@@ -20,4 +20,9 @@ jobs:
       - run: |
           for file in desktop/*.cjs; do node --check "$file"; done
           for file in public/*.js; do node --check "$file"; done
+      - name: Configure Electron sandbox
+        run: |
+          node -e "require('electron')"
+          sudo chown root:root node_modules/electron/dist/chrome-sandbox
+          sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
       - run: xvfb-run -a node_modules/.bin/electron --disable-gpu scripts/test_article_view.cjs
