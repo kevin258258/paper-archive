@@ -60,6 +60,6 @@ def save(data):
 
 
 def public():
-    return {**read(), 'app_version': '0.9.0', 'has_key': bool(os.environ.get('PAPER_API_KEY') or os.environ.get('OPENAI_API_KEY')),
+    return {**read(), 'app_version': '0.9.1', 'has_key': bool(os.environ.get('PAPER_API_KEY') or os.environ.get('OPENAI_API_KEY')),
             'codex_available': bool(read()["codex_path"] or shutil.which('codex')), 'vault': str(lib.ROOT),
             'translation_ready': bool(shutil.which('xelatex')), 'desktop': bool(os.environ.get('PAPER_DESKTOP_TOKEN'))}

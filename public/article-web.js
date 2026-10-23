@@ -1,4 +1,5 @@
-import {$,esc} from './api.js';
+import {$} from './api.js';
+import {buildWebBlocks} from './article-web-content.js';
 
 /** The native surface owns the original website; app controls stay in this DOM. */
 export class WebArticle{
@@ -37,15 +38,7 @@ export class WebArticle{
     try{await this.send('bounds',{bounds,visible});}catch{}
   }
   payload(){
-    if(!this.blocks)this.blocks=this.article.document.blocks.map(b=>{
-      const html=this.article.markdown(b.original,true),template=document.createElement('template');template.innerHTML=html;
-      template.content.querySelectorAll('a[href^="#"]').forEach(n=>{if(/^\d+(?:[,–-]\d+)*$/.test(n.textContent.trim()))n.remove();});
-      const formulas=[];
-      b.original.replace(/```[\s\S]*?```|`[^`\n]+`|\\\[([\s\S]*?)\\\]|\$\$([\s\S]*?)\$\$|\\\(([\s\S]*?)\\\)|(?<![\\\w])\$([^\n$]+?)\$(?!\w)/g,(match,a,b,c,d)=>{if(!match.startsWith('`'))formulas.push(a??b??c??d);return match;});
-      let formula=0;template.content.querySelectorAll('.katex,math,mjx-container,d-math').forEach(n=>n.replaceWith(' MATH '+(formulas[formula++]||'UNKNOWN '+n.textContent)+' END '));
-      const source=template.content.textContent;
-      return {index:b.index,source,html:this.article.markdown(b.chinese||'',true),translated:!!b.chinese,code:/^```/.test(b.original)||/^\s*\$\$[\s\S]*\$\$\s*$/.test(b.original),tag:template.content.firstElementChild?.tagName.toLowerCase()||''};
-    });
+    if(!this.blocks)this.blocks=buildWebBlocks(this.article.document.blocks,this.article.markdown);
     return {blocks:this.blocks,mode:this.article.mode==='bilingual'?'bilingual':this.r.language,highlights:this.r.saved.highlights};
   }
   async load(page){
@@ -62,9 +55,9 @@ export class WebArticle{
       $('[data-web=offline]',this.shell).disabled=!state.snapshot;
       $('[data-web=snapshot]',this.shell).disabled=state.loading||state.offline;
       if(state.loading){this.status.textContent='正在载入原站与网页快照…';return;}
-      const coverage=Number.isInteger(state.total)?` · 译文 ${state.matched}/${state.total} 段`:'';
+      const coverage=Number.isInteger(state.total)?` · 已替换 ${state.matched}/${state.total} 处`:'';
       this.status.textContent=(state.offline?'离线快照 · 静态':'原站 · 交互')+coverage+(state.error?' · '+state.error:'')+(state.snapshotError?' · 快照未保存':'');
-      this.status.title=[state.matched<state.total?'未匹配的内容保留原文，可在整理版阅读全部译文。':'',state.error,state.snapshotError].filter(Boolean).join('\n');
+      this.status.title=[state.matched<state.total?'未定位的译文保留原文，可在整理版查看：'+(state.unmatched||[]).join('、'):'直接替换原网页文字。作者姓名、代码与纯公式保持原样。',state.error,state.snapshotError].filter(Boolean).join('\n');
       if(this.destination&&state.total){await this.send('go',{page:this.destination});this.destination=null;this.ready=true;return;}
       if(Number.isInteger(state.page)&&state.page!==this.article.current){this.article.current=state.page;this.r.viewer.currentPageNumber=state.page;$('#reader-page',this.r.host).value=state.page;this.article.update();}
       const selection=$('.article-web-selection',this.shell);selection.hidden=!state.selection;

@@ -25,7 +25,7 @@ class ArticleViews{
     }
     if(data.command==='reload'){if(item.loading)throw Error('网页正在载入，可先切换到整理版');await this.load(item,data.offline===true);return this.state(item);}
     if(data.command==='snapshot'){if(item.loading||!item.ready)throw Error('请先等待网页载入');if(item.offline)throw Error('当前已是离线快照');await this.snapshot(item);return this.state(item);}
-    if(data.command==='configure'){item.payload=this.payload(data);await this.configure(item);return this.state(item);}
+    if(data.command==='configure'){item.payload={...this.payload(data),baseURL:item.context.source_url};await this.configure(item);return this.state(item);}
     if(data.command==='go'){if(Number.isInteger(data.page))await this.evaluate(item,`globalThis.__paperArchiveArticle?.go(${data.page})`);return this.state(item);}
     if(data.command==='find'){const query=String(data.query||'').slice(0,2000);return this.evaluate(item,`globalThis.__paperArchiveArticle?.find(${JSON.stringify(query)},${data.previous===true},${data.again===true})`);}
     if(data.command==='clear-selection'){await this.evaluate(item,'globalThis.__paperArchiveArticle?.clearSelection()');return {};}
@@ -43,7 +43,7 @@ class ArticleViews{
   async open(data){
     const payload=this.payload(data);let item=this.views.get(data.id);
     if(item){item.payload=payload;await this.configure(item);return this.state(item);}
-    const context=await this.context(data.id);if(!publicURL(context.source_url))throw Error('文章原始地址无效');
+    const context=await this.context(data.id);payload.baseURL=context.source_url;if(!publicURL(context.source_url))throw Error('文章原始地址无效');
     const partition='article-'+crypto.randomBytes(16).toString('hex'),ses=session.fromPartition(partition);
     ses.setPermissionRequestHandler((_,__,callback)=>callback(false));ses.setPermissionCheckHandler(()=>false);
     ses.on('will-download',event=>event.preventDefault());
