@@ -38,8 +38,8 @@ export class WebArticle{
     try{await this.send('bounds',{bounds,visible});}catch{}
   }
   payload(){
-    if(!this.blocks)this.blocks=buildWebBlocks(this.article.document.blocks,this.article.markdown);
-    return {blocks:this.blocks,mode:this.article.mode==='bilingual'?'bilingual':this.r.language,highlights:this.r.saved.highlights};
+    if(!this.blocks)this.blocks=buildWebBlocks(this.article.document.blocks,this.article.markdown,this.article.document.source_url);
+    return {blocks:this.blocks,title:{original:this.article.document.title,chinese:this.article.document.chinese_title},mode:this.article.mode==='bilingual'?'bilingual':this.r.language,highlights:this.r.saved.highlights};
   }
   async load(page){
     this.destination=page;this.ready=false;
@@ -57,7 +57,7 @@ export class WebArticle{
       if(state.loading){this.status.textContent='正在载入原站与网页快照…';return;}
       const coverage=Number.isInteger(state.total)?` · 已替换 ${state.matched}/${state.total} 处`:'';
       this.status.textContent=(state.offline?'离线快照 · 静态':'原站 · 交互')+coverage+(state.error?' · '+state.error:'')+(state.snapshotError?' · 快照未保存':'');
-      this.status.title=[state.matched<state.total?'未定位的译文保留原文，可在整理版查看：'+(state.unmatched||[]).join('、'):'直接替换原网页文字。作者姓名、代码与纯公式保持原样。',state.error,state.snapshotError].filter(Boolean).join('\n');
+      this.status.title=[state.matched<state.total?'未定位的译文保留原文，可在整理版查看：'+(state.unmatched||[]).join('、'):'直接替换原网页文字。作者姓名、代码、纯公式与动态加载占位符保持原样。',state.error,state.snapshotError].filter(Boolean).join('\n');
       if(this.destination&&state.total){await this.send('go',{page:this.destination});this.destination=null;this.ready=true;return;}
       if(Number.isInteger(state.page)&&state.page!==this.article.current){this.article.current=state.page;this.r.viewer.currentPageNumber=state.page;$('#reader-page',this.r.host).value=state.page;this.article.update();}
       const selection=$('.article-web-selection',this.shell);selection.hidden=!state.selection;

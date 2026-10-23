@@ -5,6 +5,7 @@ const crypto=require('node:crypto');
 const {pathToFileURL}=require('node:url');
 const {publicURL,publicRequest}=require('./article-url.cjs');
 const {installArticleOverlay}=require('./article-overlay.cjs');
+const {articleSnapshotStyles}=require('./article-snapshot.cjs');
 const WORLD=1004;
 
 /** The remote document has no preload, app cookies, IPC or local capabilities. */
@@ -36,9 +37,10 @@ class ArticleViews{
     if(!['original','chinese','bilingual'].includes(data.mode)||!Array.isArray(data.blocks)||data.blocks.length>10000||JSON.stringify(data.blocks).length>25_000_000)throw Error('无效网页译文');
     const blocks=data.blocks.map(b=>{
       if(!Number.isInteger(b.index)||b.index<1||typeof b.html!=='string'||typeof b.source!=='string'||b.source.length>200000||b.html.length>500000)throw Error('无效文章段落');
-      return {index:b.index,source:b.source,html:b.html,tag:String(b.tag||''),translated:!!b.translated,code:!!b.code};
+      return {index:b.index,source:b.source,html:b.html,tag:String(b.tag||''),translated:!!b.translated,code:!!b.code,dynamic:!!b.dynamic};
     });
-    return {mode:data.mode,blocks,highlights:Array.isArray(data.highlights)?data.highlights.slice(0,500):[]};
+    const title=data.title&&typeof data.title.original==='string'&&typeof data.title.chinese==='string'?{original:data.title.original.slice(0,4000),chinese:data.title.chinese.slice(0,4000)}:null;
+    return {mode:data.mode,blocks,title,highlights:Array.isArray(data.highlights)?data.highlights.slice(0,500):[]};
   }
   async open(data){
     const payload=this.payload(data);let item=this.views.get(data.id);
@@ -107,12 +109,13 @@ class ArticleViews{
     const temporary=item.context.snapshot_path+'.tmp.mhtml';
     try{
       if(restore)await this.evaluate(item,'globalThis.__paperArchiveArticle?.reset()');
+      await this.evaluate(item,`(${articleSnapshotStyles.toString()})(true)`);
       await item.view.webContents.savePage(temporary,'MHTML');
       if(item.closed){fs.rmSync(temporary,{force:true});return;}
       if(fs.statSync(temporary).size>200_000_000)throw Error('网页快照超过 200 MB');
       fs.renameSync(temporary,item.context.snapshot_path);item.snapshotError='';
     }catch(error){fs.rmSync(temporary,{force:true});item.snapshotError='快照未保存：'+error.message;if(restore)throw error;}
-    finally{if(restore)await this.configure(item);}
+    finally{await this.evaluate(item,`(${articleSnapshotStyles.toString()})(false)`);if(restore)await this.configure(item);}
   }
   close(id){const item=this.views.get(id);if(!item)return;item.closed=true;for(const cancel of [...item.pending])cancel();item.view.setVisible(false);this.window.contentView.removeChildView(item.view);item.view.webContents.close({waitForBeforeUnload:false});item.session.webRequest.onBeforeRequest(null);item.session.removeAllListeners('will-download');item.session.clearStorageData().catch(()=>{});this.views.delete(id);}
   destroy(){for(const id of [...this.views.keys()])this.close(id);}
